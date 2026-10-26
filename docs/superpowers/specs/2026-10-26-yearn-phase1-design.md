@@ -2,7 +2,7 @@
 
 Date: 2026-10-26
 Owner: Anuj (sole user)
-Status: draft for approval
+Status: approved 2026-10-26 (development started)
 
 ## 1. Intent
 
@@ -44,7 +44,7 @@ Phase 1 exists so that nothing is ever lost and phase 2 has complete raw materia
 - **Platform:** native Android app in **Kotlin**.
 - **Interaction:** share-and-forget. Auto-organization comes later; Anuj never tags.
 - **Note:** a small "note dot" on the capture sheet. Tapping it lets him write a note; ignoring it is the normal path.
-- **Capture animation:** a glass drop forms at the bottom of the screen, spreads up into a frosted glass sheet over the blurred source app, shows what was caught, then pours back down into the drop, which squishes, ripples and vanishes. It must feel like real water, which will take real animation work. (Mockup: `.superpowers/brainstorm/*/content/share-capture-feel-v2.html`.)
+- **Capture animation:** a glass drop forms at the bottom of the screen, spreads up into a frosted glass sheet over the blurred source app, shows what was caught, then pours back down into the drop, which squishes, ripples and vanishes. It must feel like real water, which will take real animation work. (Mockup: `docs/design/capture-poc.html`.)
 - **Home screen:** a list of saves, newest first, each with its sync status.
 - **Sync transport:** **Tailscale**, so it syncs from anywhere, not only home Wi-Fi.
 - **Sync timing:** sync whenever a connection is available, plus a once-a-day sync. (Interpretation, confirmed in conversation: upload as soon as possible; a daily background run catches anything left behind.)
@@ -124,6 +124,8 @@ The record format is versioned (`schema_version`) because phase 2 will read ever
 - **Tap a save → detail:** the full text, all files (viewable/playable), the note (editable), and a "Raw" section showing the full recorded intent and extras. The raw view is how Anuj and the phase-2 builder learn what each app actually sends.
 - **Settings:** desktop address (Tailscale MagicDNS name or IP and port), pairing token, a "Test connection" button, last successful sync time.
 - Editing a note after upload marks the capture as needing a re-sync of its note (a small update, not a re-upload of files).
+
+**Visual direction (Anuj, 2026-10-26, after the design round):** iOS Liquid Glass is the inspiration for every screen: floating glass circle and capsule controls, large bold titles, inset grouped lists with large corner radii, glass sheets over vivid media, a floating glass sidebar on the inner screen. **Not Material Design**: no stock Material components, Material icons or Material colour schemes, even though this is an Android app. The capture sheet follows the approved POC (`docs/design/capture-poc.html`): a small, see-through white glass sheet low on the screen over the still-visible app. Reference boards: https://claude.ai/artifact/L8wXWK4Amuk5wryV4Az2g8 (capture row and app row; the desktop boards are not part of phase 1, since the receiver has no screen).
 
 ## 8. Sync: phone → desktop
 
