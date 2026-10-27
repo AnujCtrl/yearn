@@ -167,3 +167,26 @@ async def test_bad_note_is_422(client):
         assert r.status_code == 422 and r.json() == {"error": "bad_note"}
     r = await client.put(f"/v1/captures/{cid}/note", content=b"zzz")
     assert r.status_code == 422 and r.json() == {"error": "bad_note"}
+
+
+@pytest.mark.parametrize("where", ["stage", "commit"])
+async def test_disk_full_answers_507(tmp_path, monkeypatch, capsys, where):
+    import errno
+
+    from yearn_receiver import store as store_mod
+
+    def full(*a, **kw):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    async with make_client(tmp_path, AUTH) as c:
+        cid = str(uuid4())
+        data = b"abc"
+        if where == "stage":
+            monkeypatch.setattr(store_mod, "_fsync_dir", full)
+            r = await put_file(c, cid, data)
+        else:
+            monkeypatch.setattr(store_mod, "_write_durable", full)
+            r = await c.post(f"/v1/captures/{cid}/commit", json=rec(cid, []))
+    assert r.status_code == 507
+    assert r.json() == {"error": "disk_full"}
+    assert "disk full" in capsys.readouterr().err

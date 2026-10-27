@@ -150,6 +150,12 @@ def _validate(capture_id: str, record: dict) -> tuple[datetime, list[dict]]:
 class CaptureStore:
     def __init__(self, root: Path):
         self.root = Path(root)
+        # Captures are private: 0700 on the root and its top-level trees.
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.stat(self.root).st_mode & 0o077:
+            os.chmod(self.root, 0o700)
+        for sub in (".staging", "captures"):
+            (self.root / sub).mkdir(mode=0o700, exist_ok=True)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._index_lock = threading.Lock()
         # Held by the commit worker thread itself, so it outlives a cancelled awaiter.

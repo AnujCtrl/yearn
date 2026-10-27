@@ -402,3 +402,15 @@ async def test_commit_retry_after_failed_final_rename(tmp_path, monkeypatch):
     path = await s.commit(cid, r)
     assert (tmp_path / path / "files" / "00-a.bin").read_bytes() == data
     assert s.status(cid).stored
+
+
+def test_data_root_trees_are_private(tmp_path):
+    root = tmp_path / "data"
+    CaptureStore(root)
+    for p in (root, root / ".staging", root / "captures"):
+        assert os.stat(p).st_mode & 0o777 == 0o700
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    loose.chmod(0o755)
+    CaptureStore(loose)
+    assert os.stat(loose).st_mode & 0o777 == 0o700

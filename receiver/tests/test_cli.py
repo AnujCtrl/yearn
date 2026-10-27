@@ -46,7 +46,9 @@ def test_pair_rotates_token_keeps_other_keys(tmp_path, monkeypatch, capsys):
     assert data["data_root"] == str(tmp_path / "data")
     assert "# keep me" in cfg.read_text()
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
-    assert data["token"] in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert data["token"] in out
+    assert "http://desktop:9999" in out and "8787" not in out
 
 
 def test_reindex_prints_count(tmp_path, capsys):

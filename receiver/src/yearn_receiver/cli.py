@@ -7,6 +7,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import uvicorn
@@ -16,7 +17,6 @@ from .config import DEFAULT_DATA_ROOT, DEFAULT_PORT, ConfigError, load_config
 from .store import CaptureStore
 
 DEFAULT_CONFIG = "~/.config/yearn/receiver.toml"
-PHONE_URL = f"http://desktop:{DEFAULT_PORT}"
 
 
 def _tailscale_ipv4() -> str:
@@ -55,9 +55,14 @@ def _write_private(path: Path, text: str, *, replace: bool) -> None:
 
 
 def _pair(path: Path) -> int:
+    port = DEFAULT_PORT
     token = secrets.token_urlsafe(32)
     if path.exists():
         text = path.read_text()
+        try:
+            port = int(tomllib.loads(text).get("port", DEFAULT_PORT))
+        except (ValueError, TypeError):
+            pass  # a broken config is reported by `serve`; pair still rotates the token
         line = f"token = {_toml_str(token)}"
         if re.search(r"^token\s*=.*$", text, flags=re.M):
             text = re.sub(r"^token\s*=.*$", lambda _: line, text, count=1, flags=re.M)
@@ -75,7 +80,7 @@ def _pair(path: Path) -> int:
         )
         _write_private(path, text, replace=False)
     print(f"token: {token}")
-    print(f"url:   {PHONE_URL}")
+    print(f"url:   http://desktop:{port}")
     return 0
 
 

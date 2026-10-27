@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import errno
 import hmac
 import json
 import re
+import sys
 from uuid import UUID
 
 from starlette.applications import Starlette
@@ -49,6 +51,14 @@ def _err(error: str, status: int, index: int | None = None) -> JSONResponse:
     return JSONResponse(body, status_code=status)
 
 
+def _disk_full(e: OSError) -> JSONResponse:
+    """507 for ENOSPC (the phone retries 5xx); anything else is a real bug and propagates."""
+    if e.errno != errno.ENOSPC:
+        raise e
+    print("yearn-receiver: disk full: the data root has no space left; answering 507", file=sys.stderr)
+    return _err("disk_full", 507)
+
+
 def _canonical_id(raw: str) -> str | None:
     try:
         if str(UUID(raw)) == raw.lower():
@@ -88,6 +98,8 @@ def create_app(store: CaptureStore, token: str) -> Starlette:
             await store.stage_file(cid, index, request.stream(), digest)
         except RecordRejected as e:
             return _err(e.error, 422, e.index)
+        except OSError as e:
+            return _disk_full(e)
         return JSONResponse({"index": index, "sha256": digest}, status_code=200 if already else 201)
 
     async def commit(request: Request) -> JSONResponse:
@@ -104,6 +116,8 @@ def create_app(store: CaptureStore, token: str) -> Starlette:
             path = await store.commit(cid, record)
         except RecordRejected as e:
             return _err(e.error, 422, e.index)
+        except OSError as e:
+            return _disk_full(e)
         return JSONResponse({"stored": True, "path": path})
 
     async def note(request: Request) -> JSONResponse:
@@ -124,6 +138,8 @@ def create_app(store: CaptureStore, token: str) -> Starlette:
             store.append_note(cid, body["note"], body["note_updated_at"])
         except NotStored:
             return _err("not_stored", 404)
+        except OSError as e:
+            return _disk_full(e)
         return JSONResponse({"ok": True})
 
     return Starlette(

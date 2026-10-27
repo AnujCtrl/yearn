@@ -9,7 +9,10 @@ the phone over Tailscale. It listens only on the Tailscale address (or
     cd receiver
     uv sync
     mkdir -p ~/.config/systemd/user
-    ln -s "$PWD/deploy/yearn-receiver.service" ~/.config/systemd/user/
+    ln -sf "$PWD/deploy/yearn-receiver.service" ~/.config/systemd/user/
+
+The unit assumes the repo lives at `~/Documents/personal/yearn`. Starting at
+boot needs lingering (`loginctl enable-linger`, already on here).
 
 ## Pair
 
