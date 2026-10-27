@@ -110,3 +110,40 @@ each box and write what you saw under it, including anything that failed.
 - [ ] **Keyboard over the note.**
   - How: tap the note field in the detail sheet and on the inner screen.
   - Pass: the field stays above the keyboard.
+
+## Final-review checks
+
+Added with the final fix wave. Each one covers behaviour that Robolectric can't show on a real phone.
+
+- [ ] **a. The daily job really runs on this phone.**
+  - How:
+    - Right after install and first launch: `adb shell dumpsys jobscheduler | grep -A5 yearn`.
+    - In the evening, stop the receiver and share something. Leave the phone alone overnight without opening yearn.
+    - In the morning, start the receiver and still don't open yearn.
+  - Pass:
+    - `dumpsys` lists jobs for `com.anujp.yearn/androidx.work.impl.background.systemjob.SystemJobService`. WorkManager doesn't show the unique-work name there, but one of them is periodic with a 24 h interval and a connectivity constraint.
+    - The capture reaches the desktop by itself, through the retry backoff (at most about 5 h) or the daily job. Write down how long it took.
+    - Opening yearn afterwards shows it `Uploaded`, and it never showed `Failed` overnight.
+- [ ] **b. Tailscale off: nothing leaves, nothing fails.**
+  - How:
+    - Turn the Tailscale VPN off on the phone. On Wi-Fi, share two things and tap **Sync now**. Then repeat on mobile data with Wi-Fi off.
+    - On Wi-Fi, also run this on the desktop while you sync: `sudo tcpdump -ni any 'tcp port 8787 and not net 100.64.0.0/10'`.
+    - Turn Tailscale back on.
+  - Pass:
+    - While Tailscale is off, the captures stay `Waiting` and never turn `Failed`. **Test connection** reads `Couldn't reach your desktop`.
+    - `tcpdump` shows no packet from the phone's LAN address: the tailnet guard refuses non-Tailscale addresses before connecting.
+    - With Tailscale back on, Sync now uploads them.
+- [ ] **c. Killed mid-copy.**
+  - How: share a large video (300 MB+). While it copies, press Home, then run `adb shell am kill com.anujp.yearn`. Open yearn.
+  - Pass:
+    - The list has exactly one capture for that share.
+    - The detail shows the file with `Copy interrupted: yearn was closed before this file finished copying` in red.
+    - The capture still uploads: the desktop has its record with that file listed as an error.
+- [ ] **d. A cloud-only Google Photos video.**
+  - How: in Google Photos, share a video that is only in the cloud (not on the phone). While yearn copies, press Home and open another app for a minute.
+  - Pass: write down what happened. Did the copy finish while yearn was cached in the background (file listed with its size), or did it end as `Copy interrupted`? Either way there must be exactly one capture, and it must upload.
+- [ ] **e. Wrong token, then the right one.**
+  - How: in Settings, enter a wrong pairing token and share two things. Wait until they show `Failed · Desktop didn't accept the pairing token`. Then enter the correct token.
+  - Pass:
+    - Saving the correct token puts both captures back to `Waiting` by itself, with no Retry tap, and they upload.
+    - **Sync now** on the list also retries captures that failed on the token. Other failures, such as `Desktop rejected the file`, stay `Failed` until you tap Retry.
