@@ -1,0 +1,12 @@
+[Unit]
+Description=yearn receiver (captures from the phone over Tailscale)
+After=tailscaled.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/Documents/personal/yearn/receiver/.venv/bin/yearn-receiver serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
