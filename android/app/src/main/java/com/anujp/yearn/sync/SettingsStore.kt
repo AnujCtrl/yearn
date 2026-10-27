@@ -22,7 +22,8 @@ import java.io.File
 class SettingsStore(context: Context, private val box: SecretBox) {
     private val store: DataStore<Preferences> = dataStoreFor(File(context.applicationContext.filesDir, "datastore/settings.preferences_pb"))
 
-    val baseUrl: Flow<String?> = store.data.map { it[BASE_URL] ?: DEFAULT_BASE_URL }
+    /** Null until the user types the desktop address in Settings; there is no built-in default. */
+    val baseUrl: Flow<String?> = store.data.map { it[BASE_URL] }
     val lastSuccessfulSync: Flow<String?> = store.data.map { it[LAST_SYNC] }
 
     suspend fun setBaseUrl(url: String) {
@@ -57,7 +58,6 @@ class SettingsStore(context: Context, private val box: SecretBox) {
     }
 
     companion object {
-        const val DEFAULT_BASE_URL = "http://desktop:8787"
         private val BASE_URL = stringPreferencesKey("base_url")
         private val TOKEN_SEALED = stringPreferencesKey("token_sealed")
         private val LAST_SYNC = stringPreferencesKey("last_successful_sync")

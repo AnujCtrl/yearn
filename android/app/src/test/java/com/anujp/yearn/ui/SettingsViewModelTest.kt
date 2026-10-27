@@ -116,6 +116,17 @@ class SettingsViewModelTest {
     }
 
     @Test
+    fun hasAddress_isFalseUntilTheUserEntersOne() = runTest {
+        val store = SettingsStore(context, XorBox())
+        val vm = SettingsViewModel(store, dao = dao, clientFactory = { null }, power = { true }, scheduler = scheduler)
+        assertEquals(false, vm.hasAddress.first { it != null })
+        assertNull(vm.address.first())
+
+        vm.setAddress("desk.tail1234.ts.net:8787").join()
+        assertEquals(true, vm.hasAddress.first { it == true })
+    }
+
+    @Test
     fun setAddress_normalizesSavesAndEnqueues() = runTest {
         val store = SettingsStore(context, XorBox())
         val vm = SettingsViewModel(store, dao = dao, clientFactory = { null }, power = { true }, scheduler = scheduler)

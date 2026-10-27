@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Listen only on the desktop's Tailscale address (100.64.0.0/10) or 127.0.0.1 behind `tailscale serve`; never 0.0.0.0, the LAN or the public internet. This desktop's Tailscale IPv4 is `100.101.102.103` (MagicDNS name `desktop`). Default port: `8787`.
-- Data root defaults to `~/yearn-data` on the home volume. Refuse to start if the data root is on `fuseblk`, `ntfs` or `ntfs3` (fsync through ntfs-3g is unreliable).
+- Listen only on the desktop's Tailscale address (100.64.0.0/10) or 127.0.0.1 behind `tailscale serve`; never 0.0.0.0, the LAN or the public internet. Default port: `8787`.
+- Data root defaults to `~/yearn-data` on a native Linux filesystem. Refuse to start if the data root is on `fuseblk`, `ntfs` or `ntfs3` (fsync through ntfs-3g can't back the "stored" guarantee).
 - Reply "stored" only after the record and every file are fsynced, their hashes verified, the directory fsynced, and the folder atomically renamed into place.
 - Idempotent on capture UUID: a repeat of any request for an already-stored capture succeeds and changes nothing.
 - `record.json` is written exactly as received plus one added key, `received_at`. It is never rewritten afterwards.
@@ -257,7 +257,7 @@ git add receiver && git commit -m "feat(receiver): HTTP API over the capture sto
   - `pair`:
     - If the config doesn't exist, create it (mode 0600) with `host` from `tailscale ip -4` (first line), `port` 8787, `data_root` `~/yearn-data` and a new `secrets.token_urlsafe(32)` token.
     - If it exists, rotate only the token.
-    - Print the token and `http://desktop:8787` for the phone.
+    - Print the token and `http://<this machine's hostname>:8787` for the phone.
   - `reindex`: print the count.
 
 - [ ] **Step 1: Write failing tests**
@@ -275,11 +275,11 @@ git add receiver && git commit -m "feat(receiver): HTTP API over the capture sto
   - install: `uv sync` plus a symlink of the unit into `~/.config/systemd/user/`
   - `systemctl --user enable --now yearn-receiver`
   - `yearn-receiver pair`
-  - "the data root must stay on the home volume"
+  - "the data root must be on a native Linux filesystem"
 - [ ] **Step 4: Run `uv run pytest`.** Expected: all pass.
 - [ ] **Step 5: Live check on the desktop (no system change beyond the user unit; ask Anuj before enabling the unit).**
   - Run `uv run yearn-receiver pair`, then `uv run yearn-receiver serve`.
-  - In another shell: `curl -s -H "Authorization: Bearer $TOKEN" http://desktop:8787/v1/health`. Expected: `{"service":"yearn-receiver","api":1}`.
+  - In another shell: `curl -s -H "Authorization: Bearer $TOKEN" http://<desktop>:8787/v1/health`. Expected: `{"service":"yearn-receiver","api":1}`.
   - `curl -s http://127.0.0.1:8787/v1/health` must fail to connect, since it is bound to the Tailscale IP only.
 - [ ] **Step 6: Commit**
 

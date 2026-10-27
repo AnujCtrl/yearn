@@ -36,15 +36,15 @@ class TailnetDnsTest {
     fun namesAreResolvedThenFiltered() {
         val fake = Dns { name ->
             when (name) {
-                "desktop" -> listOf(addr("100.101.102.103"))
+                "desk" -> listOf(addr("100.101.102.103"))
                 "mixed" -> listOf(addr("203.0.113.9"), addr("100.100.1.1"))
                 else -> listOf(addr("203.0.113.9"))
             }
         }
         val guarded = TailnetDns(fake)
-        assertEquals(listOf(addr("100.101.102.103")), guarded.lookup("desktop"))
+        assertEquals(listOf(addr("100.101.102.103")), guarded.lookup("desk"))
         assertEquals(listOf(addr("100.100.1.1")), guarded.lookup("mixed"))
-        assertThrows(UnknownHostException::class.java) { guarded.lookup("desktop.lan") }
+        assertThrows(UnknownHostException::class.java) { guarded.lookup("desk.lan") }
     }
 
     @Test

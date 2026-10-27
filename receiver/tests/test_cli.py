@@ -18,6 +18,7 @@ def write_config(path, data_root, token=TOKEN, extra=""):
 
 def test_pair_creates_config_with_0600_and_long_token(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_tailscale_ipv4", lambda: "100.101.102.103")
+    monkeypatch.setattr(cli, "_hostname", lambda: "desk")
     cfg = tmp_path / "sub" / "receiver.toml"
 
     assert cli.main(["pair", "--config", str(cfg)]) == 0
@@ -29,11 +30,12 @@ def test_pair_creates_config_with_0600_and_long_token(tmp_path, monkeypatch, cap
     assert len(data["token"]) >= 32
     out = capsys.readouterr().out
     assert data["token"] in out
-    assert "http://desktop:8787" in out
+    assert "http://desk:8787" in out
 
 
 def test_pair_rotates_token_keeps_other_keys(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_tailscale_ipv4", lambda: pytest.fail("must not be called"))
+    monkeypatch.setattr(cli, "_hostname", lambda: "desk")
     cfg = tmp_path / "receiver.toml"
     write_config(cfg, tmp_path / "data", extra="# keep me\n")
 
@@ -48,7 +50,7 @@ def test_pair_rotates_token_keeps_other_keys(tmp_path, monkeypatch, capsys):
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
     out = capsys.readouterr().out
     assert data["token"] in out
-    assert "http://desktop:9999" in out and "8787" not in out
+    assert "http://desk:9999" in out and "8787" not in out
 
 
 def test_reindex_prints_count(tmp_path, capsys):

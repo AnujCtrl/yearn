@@ -1,0 +1,65 @@
+name: Release APK
+
+# Push a tag like v0.1.0 to publish a signed APK as a GitHub Release.
+# Obtainium watches the releases of this repo.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version from the tag
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest
+
+      - name: Build the signed release APK
+        working-directory: android
+        env:
+          YEARN_KEYSTORE_BASE64: ${{ secrets.YEARN_KEYSTORE_BASE64 }}
+          YEARN_KEYSTORE_PASSWORD: ${{ secrets.YEARN_KEYSTORE_PASSWORD }}
+          YEARN_KEY_PASSWORD: ${{ secrets.YEARN_KEY_PASSWORD }}
+          YEARN_KEY_ALIAS: ${{ secrets.YEARN_KEY_ALIAS }}
+          VERSION_NAME: ${{ steps.version.outputs.name }}
+        run: |
+          export YEARN_KEYSTORE="$RUNNER_TEMP/yearn-release.jks"
+          echo "$YEARN_KEYSTORE_BASE64" | base64 -d > "$YEARN_KEYSTORE"
+          ./gradlew :app:assembleRelease \
+            -PversionCode="$GITHUB_RUN_NUMBER" \
+            -PversionName="$VERSION_NAME"
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/yearn-$VERSION_NAME.apk"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "dist/yearn-$VERSION_NAME.apk"
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: android/dist/*.apk
+          generate_release_notes: true

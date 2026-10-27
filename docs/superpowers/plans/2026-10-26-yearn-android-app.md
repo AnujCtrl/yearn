@@ -26,8 +26,8 @@ A transparent `ShareActivity` writes the row first, then streams files into app 
 - Build versions:
   - AGP 9.0.0, Gradle 9.3.1 (both already cached in `~/.gradle`)
   - `compileSdk`/`targetSdk` 36, `minSdk` 33
-  - Gradle runs on JDK 21: `org.gradle.java.home=/usr/lib/jvm/java-21-openjdk` in `gradle.properties` (the system default JDK 26 is too new for AGP)
-  - SDK at `/home/user/Android/Sdk` (`local.properties`, gitignored)
+  - Gradle runs on JDK 21 (newer JDKs are too new for AGP 9.0); point `org.gradle.java.home` at a JDK 21 in your user-level `gradle.properties`, not the repo's
+  - Android SDK path in `local.properties` (gitignored)
 - Library versions: the latest stable at implementation time, pinned in `gradle/libs.versions.toml`.
 - Accept `ACTION_SEND` and `ACTION_SEND_MULTIPLE` for `*/*`.
 - Persist first: the capture row is committed before the first file byte is copied and before the sheet shows "Saved".
@@ -390,7 +390,7 @@ git add android && git commit -m "feat(app): scaffold with share target for SEND
   - `class SyncWorker : CoroutineWorker`: runs `uploader.uploadPending()`. Returns `Result.retry()` if `outcome.retry`, otherwise `success`. On success with at least one upload, writes `lastSuccessfulSync`.
   - `interface SecretBox { fun seal(plain: ByteArray): ByteArray; fun open(sealed: ByteArray): ByteArray }`. `KeystoreSecretBox` uses AES/GCM/NoPadding with the AndroidKeyStore alias `yearn_token_key` and a 12-byte IV prepended.
   - `class SettingsStore(context, box: SecretBox)`:
-    - `val baseUrl: Flow<String?>` (default `http://desktop:8787`)
+    - `val baseUrl: Flow<String?>` (no default: null until the user types the address in Settings)
     - `suspend fun setBaseUrl(String)`
     - `suspend fun setToken(String)`
     - `suspend fun token(): String?`

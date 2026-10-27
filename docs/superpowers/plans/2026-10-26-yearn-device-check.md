@@ -5,7 +5,7 @@ from `2026-10-26-yearn-receiver.md` running on the desktop, so it was not run du
 each box and write what you saw under it, including anything that failed.
 
 **Setup**
-- Install: `cd android && GRADLE_USER_HOME=~/.gradle-local ./gradlew :app:installDebug`.
+- Install: `cd android && ./gradlew :app:installDebug`.
 - Desktop: `yearn-receiver` running and reachable over Tailscale.
 - Logs while testing: `adb logcat -s yearn AndroidRuntime WM-WorkerWrapper`.
 
@@ -14,8 +14,8 @@ each box and write what you saw under it, including anything that failed.
 - [ ] **Pair the phone with the desktop.**
   - How:
     - Run `yearn-receiver pair` on the desktop.
-    - Open yearn. With no token saved, it opens on Settings by itself.
-    - Check the address, which defaults to `http://desktop:8787`; change it if your tailnet name differs.
+    - Open yearn. With no address or token saved, it opens on Settings by itself.
+    - Type the desktop address that `yearn-receiver pair` printed (for example `http://<desktop>:8787`). There is no default.
     - Tap **Pairing** and type the token. The field shows only its last four characters.
     - Press Done.
   - Pass:

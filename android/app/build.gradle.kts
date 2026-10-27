@@ -13,14 +13,30 @@ android {
         applicationId = "com.anujp.yearn"
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes -PversionCode=<run number> -PversionName=<tag without v>.
+        versionCode = (findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("versionName") as String?) ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // One fixed release key, so Obtainium can install every update over the
+    // last one. The keystore never enters the repo: CI decodes it from a secret.
+    val releaseKeystore = System.getenv("YEARN_KEYSTORE")
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("YEARN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("YEARN_KEY_ALIAS")
+                keyPassword = System.getenv("YEARN_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (releaseKeystore != null) signingConfig = signingConfigs.getByName("release")
         }
     }
 

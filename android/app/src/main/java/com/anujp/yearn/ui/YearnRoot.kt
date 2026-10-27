@@ -45,11 +45,12 @@ fun YearnRoot(
     val waiting by home.waitingCount.collectAsStateWithLifecycle()
     val header by home.header.collectAsStateWithLifecycle()
     val hasToken by settings.hasToken.collectAsStateWithLifecycle()
+    val hasAddress by settings.hasAddress.collectAsStateWithLifecycle()
     YearnRoot(
         rows,
         waiting,
         header,
-        needsSetup = hasToken == false,
+        needsSetup = hasToken == false || hasAddress == false,
         onSync = home::syncNow,
         onRetry = home::retry,
         detail = { id, pane, paneStart, onBack ->

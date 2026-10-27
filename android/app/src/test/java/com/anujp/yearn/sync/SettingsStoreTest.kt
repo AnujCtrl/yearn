@@ -36,9 +36,9 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun baseUrl_defaultsAndOverrides() = runBlocking {
+    fun baseUrl_isUnsetUntilEntered() = runBlocking {
         val store = SettingsStore(context, XorBox())
-        assertEquals("http://desktop:8787", store.baseUrl.first())
+        assertNull(store.baseUrl.first())
         store.setBaseUrl("http://x:1")
         assertEquals("http://x:1", store.baseUrl.first())
     }
@@ -60,7 +60,7 @@ class SettingsStoreTest {
         file.parentFile!!.mkdirs()
         file.writeBytes(ByteArray(64) { 0xFF.toByte() })
         val store = SettingsStore(context, XorBox())
-        assertEquals("http://desktop:8787", store.baseUrl.first())
+        assertNull(store.baseUrl.first())
         assertNull(store.token())
         store.setBaseUrl("http://x:1")
         assertEquals("http://x:1", store.baseUrl.first())

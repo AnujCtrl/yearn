@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import sys
 import tomllib
@@ -30,6 +31,11 @@ def _tailscale_ipv4() -> str:
     if not lines:
         raise ConfigError("`tailscale ip -4` printed no address; is Tailscale up?")
     return lines[0].strip()
+
+
+def _hostname() -> str:
+    """This machine's name; with Tailscale MagicDNS the phone reaches it by that name."""
+    return socket.gethostname().split(".")[0]
 
 
 def _toml_str(value: str) -> str:
@@ -80,7 +86,7 @@ def _pair(path: Path) -> int:
         )
         _write_private(path, text, replace=False)
     print(f"token: {token}")
-    print(f"url:   http://desktop:{port}")
+    print(f"url:   http://{_hostname()}:{port}")
     return 0
 
 

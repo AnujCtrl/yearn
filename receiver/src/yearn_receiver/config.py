@@ -68,7 +68,7 @@ def assert_safe_data_root(path: Path, mountinfo: str | None = None) -> None:
     if best_fstype in UNSAFE_FSTYPES:
         raise ConfigError(
             f"data root {resolved} is on a {best_fstype} mount ({best_mount}); "
-            "NTFS drives freeze this machine under load. Use the home volume."
+            "fsync on NTFS through ntfs-3g can't back the \"stored\" guarantee. Use a native Linux filesystem."
         )
 
 

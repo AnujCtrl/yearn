@@ -1,0 +1,21 @@
+name: yearn
+
+services:
+  yearn-receiver:
+    build: .
+    image: yearn-receiver:local
+    container_name: yearn-receiver
+    # Host networking: the receiver binds the Tailscale address itself (the
+    # config refuses 0.0.0.0). If tailscale0 isn't up yet at boot the bind
+    # fails, the process exits 1 and Docker restarts it until it is.
+    network_mode: host
+    restart: unless-stopped
+    user: "${YEARN_UID:-1000}:${YEARN_GID:-1000}"
+    environment:
+      HOME: ${YEARN_HOME:?set YEARN_HOME in receiver/.env, see README}
+    # Same paths inside as outside, so receiver.toml (written by `pair` on the
+    # host) means the same thing in both places.
+    volumes:
+      - ${YEARN_HOME:?set YEARN_HOME in receiver/.env, see README}/.config/yearn:${YEARN_HOME:?set YEARN_HOME in receiver/.env, see README}/.config/yearn:ro
+      - ${YEARN_HOME:?set YEARN_HOME in receiver/.env, see README}/yearn-data:${YEARN_HOME:?set YEARN_HOME in receiver/.env, see README}/yearn-data
+    stop_grace_period: 30s

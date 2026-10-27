@@ -57,16 +57,16 @@ Phase 1 exists so that nothing is ever lost and phase 2 has complete raw materia
 - Files arrive as `content://` URIs in `EXTRA_STREAM` and/or `ClipData`. **Read permission ends when the receiving activity finishes**, so files must be copied into app storage immediately, during the capture animation.
 - Which app shared it can't be relied on: `getReferrer()` can be spoofed or empty, and `getLaunchedFromPackage()` (Android 14+) is usually null unless the sender opts in. Record every available hint, labelled as a hint.
 
-**Phone:** Samsung **Galaxy Z Fold8** (on his tailnet as `my-fold`). The app must look right on **both the cover screen and the inner screen**. Consequences:
+**Phone:** Samsung **Galaxy Z Fold8**. The app must look right on **both the cover screen and the inner screen**. Consequences:
 - The capture activity must survive folding/unfolding mid-capture (a configuration change) without losing the record, the in-progress file copy, or the note being typed. Persist-first (section 6) makes this safe; the animation may restart its current phase on the new screen.
 - The sheet, drop and home-screen list need layouts for the narrow cover screen and the near-square inner screen.
 - High refresh-rate display: animations and shaders are tuned for it.
 - Samsung's One UI battery management can put apps to sleep and delay or kill background work. The app must guide Anuj once to exempt yearn from battery optimization ("Unrestricted"), and the daily sync must still be checked to actually run on this phone.
 - Whether One UI honours cross-window blur behind the capture window must be checked on the device early; if it doesn't, the fallback look (section 6) becomes the main look and must be designed as such.
 
-**Desktop host** (Anuj's desktop/Arch desktop):
-- Store captures on the main home volume. **Never write to NTFS (ntfs-3g) drives**; large writes there freeze the machine.
-- The desktop has had rare crashes. The receiver must make a capture durable on disk (fsync file and directory) before telling the phone "stored".
+**Desktop host** (a Linux desktop on the same tailnet):
+- Store captures on a native Linux filesystem, **never on an NTFS (ntfs-3g) mount**, whose fsync can't back the "stored" guarantee.
+- The desktop can crash or lose power. The receiver must make a capture durable on disk (fsync file and directory) before telling the phone "stored".
 - The desktop is not always on. The phone must tolerate the receiver being unreachable for days.
 
 **Tailscale:**
@@ -159,7 +159,7 @@ Not found anywhere: real glass / liquid UI code. That has to be built (Jetpack C
 A small, always-running service on the home desktop (systemd user service) whose only job in phase 1 is to receive captures and store them exactly as they arrived.
 
 - **API:** an upload endpoint taking a capture's record plus its files; a "do you have capture X / which of its files" check; a health/pairing check. Idempotent on capture UUID: a repeat upload of a stored capture returns success without duplicating anything.
-- **Storage layout:** one folder per capture under a data root on the home volume, e.g. `~/yearn-data/captures/YYYY/MM/<capture-id>/` holding `record.json` (exactly as received, plus `received_at`) and `files/`. An append-only index (SQLite or JSONL) lists captures for phase 2. The folder must be enough to rebuild the index (ArchiveBox pattern).
+- **Storage layout:** one folder per capture under a data root on a native Linux filesystem, e.g. `~/yearn-data/captures/YYYY/MM/<capture-id>/` holding `record.json` (exactly as received, plus `received_at`) and `files/`. An append-only index (SQLite or JSONL) lists captures for phase 2. The folder must be enough to rebuild the index (ArchiveBox pattern).
 - **Durability:** write to a temp location, verify hashes, fsync, atomic rename into place, then reply "stored".
 - **Network:** bound to the Tailscale interface only (or localhost behind `tailscale serve`).
 - **No processing** of captures in phase 1. Phase 2 will add fetching, enrichment and the mind map on top of this store.
