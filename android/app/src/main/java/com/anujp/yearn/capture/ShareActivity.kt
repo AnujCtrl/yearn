@@ -16,6 +16,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
@@ -30,7 +31,7 @@ import java.util.function.Consumer
  */
 class ShareActivity : ComponentActivity() {
     internal val viewModel: CaptureViewModel by viewModels {
-        viewModelFactory { initializer { CaptureViewModel(yearnGraph.service) } }
+        viewModelFactory { initializer { CaptureViewModel(yearnGraph.service, createSavedStateHandle()) } }
     }
 
     private val blurEnabled = mutableStateOf(false)

@@ -2,6 +2,7 @@ package com.anujp.yearn.capture
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.Looper
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -14,6 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -115,5 +117,31 @@ class ShareActivityTest {
 
         gate.complete(Unit)
         idleUntil("Saved") { activity.viewModel.state.value is SheetState.Saved }
+    }
+
+    @Test
+    fun processDeathRestore_doesNotCaptureAgain() {
+        val gate = CompletableDeferred<Unit>()
+        app.copier.gate = gate
+        val intent = streamIntent()
+        val first = Robolectric.buildActivity(ShareActivity::class.java, intent).setup()
+        idleUntil("Saving") { first.get().viewModel.state.value is SheetState.Saving }
+        val saved = Bundle()
+        first.pause().stop().saveInstanceState(saved)
+        assertEquals(1, app.captureCount())
+
+        // A new controller has a fresh ViewModelStore: no retained ViewModel, as after process death.
+        val restored = Robolectric.buildActivity(ShareActivity::class.java, intent).setup(saved)
+        val activity = restored.get()
+        idleUntil("restored sheet to settle") {
+            activity.isFinishing || activity.viewModel.state.value is SheetState.Saving
+        }
+        Thread.sleep(100)
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(1, app.captureCount())
+        assertTrue(activity.isFinishing)
+        assertEquals(SheetState.Finished, activity.viewModel.state.value)
+        gate.complete(Unit)
     }
 }

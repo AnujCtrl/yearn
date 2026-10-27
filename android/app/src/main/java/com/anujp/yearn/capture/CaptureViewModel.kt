@@ -1,6 +1,7 @@
 package com.anujp.yearn.capture
 
 import android.content.Intent
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
@@ -33,9 +34,14 @@ sealed interface SheetState {
  * Drives one share. The capture runs in [viewModelScope], so it survives a fold/unfold recreate,
  * and [start] only ever captures once per ViewModel. Nothing here finishes while [SheetState.Saving]:
  * finishing the activity ends the sender's read grant on its content URIs.
+ *
+ * [saved] carries a started marker (set before [CaptureService.begin]) and the capture id across
+ * process death: a restored activity finds them and finishes instead of capturing the share again.
+ * Startup recovery has already marked that capture's unfinished copies as errors.
  */
 class CaptureViewModel(
     private val service: CaptureService,
+    private val saved: SavedStateHandle = SavedStateHandle(),
     private val savedHoldMillis: Long = SAVED_HOLD_MILLIS,
     private val retryMillis: Long = RETRY_MILLIS,
 ) : ViewModel() {
@@ -50,9 +56,16 @@ class CaptureViewModel(
     fun start(intent: Intent, hints: () -> SourceHints) {
         if (started) return
         started = true
+        if (saved.get<Boolean>(KEY_STARTED) == true) {
+            // Process-death restore: this share was already caught by the previous process.
+            _state.value = SheetState.Finished
+            return
+        }
+        saved[KEY_STARTED] = true
         val sourceHints = hints()
         viewModelScope.launch {
             val first = beginUntilCommitted(intent, sourceHints)
+            saved[KEY_CAPTURE_ID] = first.captureId
             val done = if (first.complete) first else copyUntilDone(first)
             move(SheetState.Saved(done))
             hold = launch {
@@ -154,5 +167,7 @@ class CaptureViewModel(
         const val SAVED_HOLD_MILLIS = 1000L
         const val RETRY_MILLIS = 2000L
         const val STORAGE_ERROR = "Couldn't save on this phone. Trying again…"
+        const val KEY_STARTED = "capture.started"
+        const val KEY_CAPTURE_ID = "capture.id"
     }
 }
