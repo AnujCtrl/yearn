@@ -7,9 +7,3 @@ interface SyncScheduler {
     /** Make sure the periodic retry exists. */
     fun ensureDaily()
 }
-
-/** Placeholder until Task 8 wires WorkManager; it is deleted then. */
-object NoopSyncScheduler : SyncScheduler {
-    override fun enqueueNow() = Unit
-    override fun ensureDaily() = Unit
-}

@@ -22,10 +22,10 @@ class CaptureUploader(
     private val dao: CaptureDao,
     private val client: suspend () -> ReceiverClient?,
     private val clock: () -> ZonedDateTime,
-) {
+) : PendingUploader {
     private enum class Next { CONTINUE, CONTINUE_RETRY, STOP_RETRY, STOP_NO_RETRY }
 
-    suspend fun uploadPending(): UploadOutcome {
+    override suspend fun uploadPending(): UploadOutcome {
         val pending = dao.pendingUploads()
         if (pending.isEmpty()) return UploadOutcome(0, false)
         val c = client()

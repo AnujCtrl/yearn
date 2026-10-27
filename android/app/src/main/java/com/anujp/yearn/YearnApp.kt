@@ -8,7 +8,16 @@ import com.anujp.yearn.capture.FileCopier
 import com.anujp.yearn.capture.deviceJson
 import com.anujp.yearn.data.CaptureDao
 import com.anujp.yearn.data.YearnDatabase
-import com.anujp.yearn.sync.NoopSyncScheduler
+import androidx.work.Configuration
+import com.anujp.yearn.sync.CaptureUploader
+import com.anujp.yearn.sync.KeystoreSecretBox
+import com.anujp.yearn.sync.ReceiverClient
+import com.anujp.yearn.sync.SettingsStore
+import com.anujp.yearn.sync.SyncWorkerFactory
+import com.anujp.yearn.sync.WorkSyncScheduler
+import kotlinx.coroutines.flow.first
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.time.ZonedDateTime
 import com.anujp.yearn.sync.SyncScheduler
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -25,13 +34,16 @@ class AppGraph(
     val thumbsDir: File,
     val scheduler: SyncScheduler,
     val service: CaptureService,
+    val uploader: CaptureUploader,
+    val settings: SettingsStore,
 ) {
     companion object {
         fun build(
             context: Context,
             recovery: suspend () -> Unit = {},
             db: YearnDatabase = YearnDatabase.create(context),
-            scheduler: SyncScheduler = NoopSyncScheduler,
+            scheduler: SyncScheduler = WorkSyncScheduler(context),
+            settings: SettingsStore = SettingsStore(context, KeystoreSecretBox()),
         ): AppGraph {
             val app = context.applicationContext
             val dao = db.captureDao()
@@ -40,12 +52,21 @@ class AppGraph(
             val service = CaptureService(
                 dao, copier, scheduler, thumbs, deviceJson(app), beforeFirstCapture = recovery,
             )
-            return AppGraph(db, dao, copier, thumbs, scheduler, service)
+            val uploader = CaptureUploader(
+                dao,
+                client = {
+                    val url = settings.baseUrl.first()?.toHttpUrlOrNull()
+                    val token = settings.token()
+                    if (url == null || token == null) null else ReceiverClient.create(url, token)
+                },
+                clock = { ZonedDateTime.now() },
+            )
+            return AppGraph(db, dao, copier, thumbs, scheduler, service, uploader, settings)
         }
     }
 }
 
-open class YearnApp : Application() {
+open class YearnApp : Application(), Configuration.Provider {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recovery = CompletableDeferred<Unit>()
     private val defaultGraph: AppGraph by lazy { AppGraph.build(this, recovery = { recovery.await() }) }
@@ -54,6 +75,11 @@ open class YearnApp : Application() {
     var graphOverride: AppGraph? = null
 
     val graph: AppGraph get() = graphOverride ?: defaultGraph
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(SyncWorkerFactory(graph.uploader, graph.settings))
+            .build()
 
     override fun onCreate() {
         super.onCreate()

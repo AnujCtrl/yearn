@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      The receiver is plain http://desktop:8787. The only peer this app ever talks to is the user's own
+      receiver, reached inside the Tailscale WireGuard tunnel, so cleartext HTTP is acceptable here.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
