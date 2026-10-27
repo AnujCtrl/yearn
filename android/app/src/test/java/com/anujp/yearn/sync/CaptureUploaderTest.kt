@@ -46,6 +46,7 @@ class ReceiverDispatcher(private val token: String = "tok") : Dispatcher() {
     val commits = java.util.Collections.synchronizedList(mutableListOf<JsonObject>())
     val notes = java.util.Collections.synchronizedList(mutableListOf<JsonObject>())
     @Volatile var putHashMismatch = false
+    @Volatile var failStatusFor: String? = null
     @Volatile var commitReject: String? = null
     @Volatile var onCommit: (() -> Unit)? = null
 
@@ -61,6 +62,7 @@ class ReceiverDispatcher(private val token: String = "tok") : Dispatcher() {
         val id = parts[2]
         return when {
             parts.size == 3 && request.method == "GET" -> {
+                if (id == failStatusFor) return json(503, """{"error":"busy"}""")
                 val st = staged[id].orEmpty().entries.joinToString(",") { "\"${it.key}\":\"${it.value}\"" }
                 val stored = id in storedIds
                 json(200, """{"id":"$id","stored":$stored,"staged":{${if (stored) "" else st}}}""")
@@ -143,21 +145,23 @@ class CaptureUploaderTest {
     }
 
     private fun capture(
+        cid: String = id,
+        millis: Long = 1000,
         noteNeedsSync: Boolean = false,
         note: String? = null,
         noteUpdatedAt: String? = null,
         status: SyncStatus = SyncStatus.WAITING,
         attempts: Int = 0,
     ) = CaptureEntity(
-        id = id, capturedAt = "2026-10-26T10:00:00+05:30", capturedAtMillis = 1000,
-        baseRecordJson = """{"schema_version":1,"id":"$id","captured_at":"2026-10-26T10:00:00+05:30"}""",
+        id = cid, capturedAt = "2026-10-26T10:00:00+05:30", capturedAtMillis = millis,
+        baseRecordJson = """{"schema_version":1,"id":"$cid","captured_at":"2026-10-26T10:00:00+05:30"}""",
         sourceLabel = "Chrome", previewTitle = null, previewText = null, previewUrl = null, thumbPath = null,
         note = note, noteUpdatedAt = noteUpdatedAt, noteNeedsSync = noteNeedsSync, filesComplete = true,
         syncStatus = status, attempts = attempts, lastError = null, uploadedAt = null,
     )
 
-    private fun doneFile(index: Int, f: File, sha: String) = FileEntity(
-        captureId = id, index = index, sourceUri = "content://x/$index", displayName = f.name,
+    private fun doneFile(index: Int, f: File, sha: String, cid: String = id) = FileEntity(
+        captureId = cid, index = index, sourceUri = "content://x/$index", displayName = f.name,
         mimeType = "image/jpeg", size = f.length(), localPath = f.path, sha256 = sha, error = null,
         state = FileState.DONE,
     )
@@ -290,5 +294,89 @@ class CaptureUploaderTest {
         assertEquals("Desktop not set up yet", c.lastError)
         assertEquals(1, c.attempts)
         assertTrue(receiver.log.isEmpty())
+    }
+
+    @Test
+    fun httpClient_hasRequiredTimeouts() {
+        val c = ReceiverClient.httpClient()
+        assertEquals(10_000, c.connectTimeoutMillis)
+        assertEquals(120_000, c.readTimeoutMillis)
+        assertEquals(120_000, c.writeTimeoutMillis)
+    }
+
+    @Test
+    fun create_rejectsBlankAndHeaderIllegalTokens() {
+        assertNull(ReceiverClient.create(server.url("/"), "  \n"))
+        assertNull(ReceiverClient.create(server.url("/"), "to\nken"))
+        assertNull(ReceiverClient.create(server.url("/"), "tok\u00e9n"))
+        assertNotNull(ReceiverClient.create(server.url("/"), " tok\n"))
+    }
+
+    @Test
+    fun badTokenFromCreate_meansNotSetUp() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        val out = uploader(ReceiverClient.create(server.url("/"), "to\nken")).uploadPending()
+        assertEquals(UploadOutcome(0, false), out)
+        assertEquals("Desktop not set up yet", dao.get(id)!!.lastError)
+        assertTrue(receiver.log.isEmpty())
+    }
+
+    @Test
+    fun unexpectedException_goesWaitingAndNextCaptureStillRuns() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        val id2 = "22222222-2222-4333-8444-555555555555"
+        dao.insertCapture(capture(millis = 1000), listOf(doneFile(0, f, sha)))
+        dao.insertCapture(capture(cid = id2, millis = 2000), listOf(doneFile(0, f, sha, id2)))
+        // A raw constructor with a newline in the token makes Request.Builder throw IllegalArgumentException.
+        val out = uploader(ReceiverClient(server.url("/"), "to\nken", OkHttpClient())).uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        for (i in listOf(id, id2)) {
+            val c = dao.get(i)!!
+            assertEquals(SyncStatus.WAITING, c.syncStatus)
+            assertEquals("Couldn't reach your desktop", c.lastError)
+            assertEquals(1, c.attempts)
+        }
+    }
+
+    @Test
+    fun hashMismatch_isTransientAndContinues() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        val id2 = "22222222-2222-4333-8444-555555555555"
+        receiver.putHashMismatch = true
+        dao.insertCapture(capture(millis = 1000), listOf(doneFile(0, f, sha)))
+        dao.insertCapture(capture(cid = id2, millis = 2000), listOf(doneFile(0, f, sha, id2)))
+        val out = uploader().uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        assertTrue(receiver.log.any { it.contains(id2) })
+        assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
+        assertEquals(1, dao.get(id)!!.attempts)
+    }
+
+    @Test
+    fun missingLocalFile_marksFailedWithoutRequests() = runBlocking {
+        val (f, sha) = makeFile("gone.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        assertTrue(f.delete())
+        val out = uploader().uploadPending()
+        assertEquals(UploadOutcome(0, false), out)
+        val c = dao.get(id)!!
+        assertEquals(SyncStatus.FAILED, c.syncStatus)
+        assertEquals("File missing on this phone", c.lastError)
+        assertTrue(receiver.log.isEmpty())
+    }
+
+    @Test
+    fun unreachableOnFirst_stopsBeforeSecond() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        val id2 = "22222222-2222-4333-8444-555555555555"
+        receiver.failStatusFor = id
+        dao.insertCapture(capture(millis = 1000), listOf(doneFile(0, f, sha)))
+        dao.insertCapture(capture(cid = id2, millis = 2000), listOf(doneFile(0, f, sha, id2)))
+        val out = uploader().uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        assertTrue(receiver.log.none { it.contains(id2) })
+        assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
+        assertEquals(SyncStatus.WAITING, dao.get(id2)!!.syncStatus)
     }
 }

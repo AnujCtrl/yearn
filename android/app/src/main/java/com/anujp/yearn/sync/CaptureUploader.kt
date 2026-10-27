@@ -8,6 +8,7 @@ import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.data.Timestamps
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.time.ZonedDateTime
 
@@ -22,7 +23,7 @@ class CaptureUploader(
     private val client: suspend () -> ReceiverClient?,
     private val clock: () -> ZonedDateTime,
 ) {
-    private enum class Next { CONTINUE, STOP_RETRY, STOP_NO_RETRY }
+    private enum class Next { CONTINUE, CONTINUE_RETRY, STOP_RETRY, STOP_NO_RETRY }
 
     suspend fun uploadPending(): UploadOutcome {
         val pending = dao.pendingUploads()
@@ -38,6 +39,7 @@ class CaptureUploader(
             return UploadOutcome(0, false)
         }
         var uploaded = 0
+        var retry = false
         for (p in pending) {
             val result = try {
                 process(c, p)
@@ -48,11 +50,12 @@ class CaptureUploader(
             if (result.first == true) uploaded++
             when (result.second) {
                 Next.CONTINUE -> Unit
+                Next.CONTINUE_RETRY -> retry = true
                 Next.STOP_RETRY -> return UploadOutcome(uploaded, true)
                 Next.STOP_NO_RETRY -> return UploadOutcome(uploaded, false)
             }
         }
-        return UploadOutcome(uploaded, false)
+        return UploadOutcome(uploaded, retry)
     }
 
     /** Returns (counted as uploaded, what the run does next). */
@@ -113,6 +116,13 @@ class CaptureUploader(
             return true to Next.CONTINUE
         } catch (e: ReceiverError) {
             return null to handle(e, p, dao.get(p.id) ?: cur, reupload)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Bad header value, SQLite trouble, anything unforeseen: never leave the capture stuck in Uploading.
+            val next = runCatching { handle(ReceiverError.Unreachable(e), p, dao.get(p.id) ?: cur, reupload) }
+            if (next.isFailure) next.exceptionOrNull().let { if (it is CancellationException) throw it }
+            return null to Next.CONTINUE_RETRY
         }
     }
 
@@ -140,7 +150,8 @@ class CaptureUploader(
         return when {
             transient -> {
                 if (!keepStatus) dao.setSync(cur.id, SyncStatus.WAITING, cur.attempts + 1, UNREACHABLE, null)
-                Next.STOP_RETRY
+                // A corrupt local file must not block every later capture; an unreachable desktop would.
+                if (e is ReceiverError.Rejected) Next.CONTINUE_RETRY else Next.STOP_RETRY
             }
             e is ReceiverError.Unauthorized -> {
                 if (!keepStatus) dao.setSync(cur.id, SyncStatus.FAILED, cur.attempts, UNAUTHORIZED, null)

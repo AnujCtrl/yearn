@@ -22,6 +22,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 sealed class ReceiverError : Exception() {
     /** An [IOException] or a 5xx (including 507 disk_full): worth retrying later. */
@@ -52,6 +53,22 @@ data class RemoteStatus(val stored: Boolean, val staged: Map<Int, String>)
 /** Phone side of the receiver's wire contract v1. Streams file bodies; never buffers a whole file. */
 class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, private val http: OkHttpClient) {
     private val jsonType = "application/json".toMediaType()
+
+    companion object {
+        /** The receiver re-hashes and fsyncs before answering a commit, so reads need real headroom. */
+        fun httpClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .build()
+
+        /** Trims the token; null (treated as "not set up") if it is blank or not a legal header value. */
+        fun create(baseUrl: HttpUrl, token: String, http: OkHttpClient = httpClient()): ReceiverClient? {
+            val t = token.trim()
+            if (t.isEmpty() || t.any { it.code !in 0x21..0x7e }) return null
+            return ReceiverClient(baseUrl, t, http)
+        }
+    }
 
     suspend fun health() {
         call(request("v1", "health").get().build())
