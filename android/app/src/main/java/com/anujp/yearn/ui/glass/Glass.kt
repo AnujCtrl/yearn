@@ -52,6 +52,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -344,6 +345,25 @@ fun Modifier.pressable(
         }
         .clickable(interactionSource = interaction, indication = null, role = role, onClick = onClick)
         .then(if (label != null) Modifier.semantics { contentDescription = label } else Modifier)
+}
+
+/**
+ * A touch area at least [size] wide and tall around small inline text or a capsule, without moving
+ * anything: the content (put it in a centring Box with this first, then [pressable]) is measured with
+ * the minimum, but reports its natural size to the parent and is centred over it, so the hit area
+ * overflows evenly instead of pushing the row apart. Compose hit-tests a node's own bounds.
+ */
+fun Modifier.minTouchTarget(size: Dp = 48.dp): Modifier = layout { measurable, constraints ->
+    val minPx = size.roundToPx()
+    val placeable = measurable.measure(
+        constraints.copy(
+            minWidth = maxOf(constraints.minWidth, minPx).coerceAtMost(constraints.maxWidth),
+            minHeight = maxOf(constraints.minHeight, minPx).coerceAtMost(constraints.maxHeight),
+        ),
+    )
+    val w = measurable.maxIntrinsicWidth(placeable.height).coerceIn(constraints.minWidth, placeable.width)
+    val h = measurable.minIntrinsicHeight(w).coerceIn(constraints.minHeight, placeable.height)
+    layout(w, h) { placeable.place((w - placeable.width) / 2, (h - placeable.height) / 2) }
 }
 
 /** A round glass button (44 dp in the title bar) holding one glyph. */

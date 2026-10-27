@@ -74,6 +74,7 @@ import com.anujp.yearn.ui.glass.YearnType
 import com.anujp.yearn.ui.glass.bottomHairline
 import com.anujp.yearn.ui.glass.glass
 import com.anujp.yearn.ui.glass.insetGroupItem
+import com.anujp.yearn.ui.glass.minTouchTarget
 import com.anujp.yearn.ui.glass.pressable
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeState
@@ -303,12 +304,12 @@ private fun RetryLine(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
-        BasicText(
-            action,
-            Modifier.pressable(onRetry, label = "Retry upload", pressedScale = 1f),
-            style = style.copy(color = color, fontWeight = FontWeight.SemiBold),
-            maxLines = 1,
-        )
+        Box(
+            Modifier.minTouchTarget().pressable(onRetry, label = "Retry upload", pressedScale = 1f),
+            contentAlignment = Alignment.Center,
+        ) {
+            BasicText(action, style = style.copy(color = color, fontWeight = FontWeight.SemiBold), maxLines = 1)
+        }
     }
 }
 
@@ -357,6 +358,10 @@ internal val TilePalette = listOf(
 ).map { Color(it) }
 
 /** Same label, same tile: String.hashCode is fixed by the JVM spec. */
+/** `Chrome · Failed: Desktop rejected the file`, as the phone list shows the reason; ellipsized by the row. */
+internal fun sidebarFailedLead(row: SaveRow): String =
+    "${row.source} · Failed" + (row.failedReason?.let { ": $it" } ?: "")
+
 internal fun tileColorIndex(source: String): Int = Math.floorMod(source.trim().lowercase().hashCode(), TilePalette.size)
 
 internal fun tileLetter(source: String): String =
@@ -471,8 +476,8 @@ private fun SidebarRow(row: SaveRow, selected: Boolean, onClick: () -> Unit, onR
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (selected || pressed) colors.sidebarSelected else Color.Transparent)
+            // A shaped background, not a clip: Retry's 48 dp touch area may overhang the row's edge.
+            .background(if (selected || pressed) colors.sidebarSelected else Color.Transparent, RoundedCornerShape(18.dp))
             .clickable(interactionSource = interaction, indication = null, role = Role.Button, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -488,7 +493,7 @@ private fun SidebarRow(row: SaveRow, selected: Boolean, onClick: () -> Unit, onR
             )
             if (row.status == "Failed") {
                 RetryLine(
-                    "${row.source} · Failed", "retry", colors.sidebarDanger, YearnType.SidebarRowSubtitle, onRetry,
+                    sidebarFailedLead(row), "retry", colors.sidebarDanger, YearnType.SidebarRowSubtitle, onRetry,
                     separator = ", ",
                 )
             } else {

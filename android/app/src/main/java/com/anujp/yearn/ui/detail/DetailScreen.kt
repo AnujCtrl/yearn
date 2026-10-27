@@ -100,6 +100,7 @@ import com.anujp.yearn.ui.glass.blocksTouchesBelow
 import com.anujp.yearn.ui.glass.bottomHairline
 import com.anujp.yearn.ui.glass.cssBlur
 import com.anujp.yearn.ui.glass.glass
+import com.anujp.yearn.ui.glass.minTouchTarget
 import com.anujp.yearn.ui.glass.pressable
 import com.anujp.yearn.ui.home.TilePalette
 import com.anujp.yearn.ui.home.decodeThumb
@@ -557,15 +558,19 @@ private fun DesktopRow(c: CaptureEntity, now: ZonedDateTime, sheet: SheetColors,
                     style = YearnType.Caption.copy(color = colors.danger),
                 )
             }
-            BasicText(
-                "Retry",
-                Modifier
-                    .pressable(onRetry, label = "Retry upload", pressedScale = 0.96f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(colors.accent.copy(alpha = 0.14f))
-                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                style = YearnType.Button.copy(color = colors.accent),
-            )
+            Box(
+                Modifier.minTouchTarget().pressable(onRetry, label = "Retry upload", pressedScale = 0.96f),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    "Retry",
+                    Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(colors.accent.copy(alpha = 0.14f))
+                        .padding(horizontal = 14.dp, vertical = 7.dp),
+                    style = YearnType.Button.copy(color = colors.accent),
+                )
+            }
         }
     }
 }
@@ -627,18 +632,24 @@ private fun RawBlock(json: String, sheet: SheetColors, modifier: Modifier = Modi
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             BasicText("As your desktop receives it", Modifier.weight(1f), style = YearnType.Caption.copy(color = colors.secondaryLabel))
-            BasicText(
-                if (copied) "Copied" else "Copy",
+            Box(
                 Modifier
+                    .minTouchTarget()
                     .pressable({
                         copyText(context, json)
                         copied = true
-                    }, label = "Copy raw share", pressedScale = 0.96f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(colors.accent.copy(alpha = 0.14f))
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                style = YearnType.Button.copy(color = colors.accent, fontSize = 14.sp),
-            )
+                    }, label = "Copy raw share", pressedScale = 0.96f),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText(
+                    if (copied) "Copied" else "Copy",
+                    Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(colors.accent.copy(alpha = 0.14f))
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                    style = YearnType.Button.copy(color = colors.accent, fontSize = 14.sp),
+                )
+            }
         }
         BasicText(
             json,
