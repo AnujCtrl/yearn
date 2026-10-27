@@ -60,6 +60,17 @@ abstract class CaptureDao {
     )
     abstract suspend fun pendingUploads(): List<CaptureEntity>
 
+    /** A cause fixed (e.g. the pairing token): failed saves with exactly that [reason] start over as Waiting. */
+    @Query(
+        "UPDATE captures SET syncStatus = 'WAITING', attempts = 0, lastError = NULL " +
+            "WHERE syncStatus = 'FAILED' AND lastError = :reason",
+    )
+    abstract suspend fun resetFailed(reason: String): Int
+
+    /** Process-start recovery: an upload the last process died in is just waiting again. */
+    @Query("UPDATE captures SET syncStatus = 'WAITING' WHERE syncStatus = 'UPLOADING'")
+    abstract suspend fun resetStaleUploading(): Int
+
     @Query("UPDATE files SET state = 'ERROR', error = :error WHERE state = 'PENDING'")
     protected abstract suspend fun failPendingFiles(error: String): Int
 

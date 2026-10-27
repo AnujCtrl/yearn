@@ -5,6 +5,7 @@ import com.anujp.yearn.data.CaptureEntity
 import com.anujp.yearn.data.CaptureRecord
 import com.anujp.yearn.data.FileState
 import com.anujp.yearn.data.SyncStatus
+import com.anujp.yearn.data.TOKEN_REJECTED_REASON
 import com.anujp.yearn.data.Timestamps
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -176,7 +177,7 @@ class CaptureUploader(
         const val NOT_SET_UP = "Desktop not set up yet"
         const val UNREACHABLE = "Couldn't reach your desktop"
         const val REJECTED = "Desktop rejected the file"
-        const val UNAUTHORIZED = "Desktop didn't accept the pairing token"
+        const val UNAUTHORIZED = TOKEN_REJECTED_REASON
         const val FILE_MISSING = "File missing on this phone"
     }
 }

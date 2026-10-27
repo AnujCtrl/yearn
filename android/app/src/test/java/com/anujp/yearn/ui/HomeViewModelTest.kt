@@ -53,6 +53,19 @@ private class FakeCaptureDao : CaptureDao() {
     override suspend fun clearNoteNeedsSync(id: String) = Unit
     override suspend fun pendingUploads(): List<CaptureEntity> = emptyList()
     override suspend fun failPendingFiles(error: String): Int = 0
+    override suspend fun resetFailed(reason: String): Int {
+        var n = 0
+        all.value = all.value.map {
+            if (it.syncStatus == SyncStatus.FAILED && it.lastError == reason) {
+                n++
+                it.copy(syncStatus = SyncStatus.WAITING, attempts = 0, lastError = null)
+            } else {
+                it
+            }
+        }
+        return n
+    }
+    override suspend fun resetStaleUploading(): Int = 0
     override suspend fun completeCapturesWithoutPending(): Int = 0
 }
 
@@ -207,5 +220,22 @@ class HomeViewModelTest {
         lastSync.value = "2026-10-27T14:59:40+05:30"
         runCurrent()
         assertEquals("Synced just now", vm.header.value)
+    }
+
+    @Test
+    fun syncNow_retriesTokenFailedSavesOnly() = runTest {
+        dao.all.value = listOf(
+            capture("tok", SyncStatus.FAILED, lastError = "Desktop didn't accept the pairing token", attempts = 2),
+            capture("rej", SyncStatus.FAILED, lastError = "Desktop rejected the file"),
+        )
+        val vm = viewModel()
+        vm.syncNow()
+        runCurrent()
+        val tok = dao.all.value.first { it.id == "tok" }
+        assertEquals(SyncStatus.WAITING, tok.syncStatus)
+        assertEquals(0, tok.attempts)
+        assertNull(tok.lastError)
+        assertEquals(SyncStatus.FAILED, dao.all.value.first { it.id == "rej" }.syncStatus)
+        assertEquals(1, scheduler.nowCount)
     }
 }

@@ -2,6 +2,8 @@ package com.anujp.yearn.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.anujp.yearn.data.CaptureDao
+import com.anujp.yearn.data.TOKEN_REJECTED_REASON
 import com.anujp.yearn.sync.ReceiverClient
 import com.anujp.yearn.sync.ReceiverError
 import com.anujp.yearn.sync.SettingsStore
@@ -29,6 +31,7 @@ import java.util.Locale
  */
 class SettingsViewModel(
     private val store: SettingsStore,
+    private val dao: CaptureDao,
     private val clientFactory: suspend () -> ReceiverClient?,
     private val power: () -> Boolean,
     private val scheduler: SyncScheduler,
@@ -125,6 +128,7 @@ class SettingsViewModel(
         _addressError.value = null
         if (url == store.baseUrl.first()) return@launch
         store.setBaseUrl(url)
+        retryTokenFailures()
         scheduler.enqueueNow()
     }
 
@@ -139,8 +143,20 @@ class SettingsViewModel(
         _tokenError.value = null
         store.setToken(token)
         showToken(token)
+        retryTokenFailures()
         scheduler.enqueueNow()
         testConnection()
+    }
+
+    /** Saves the old token was refused for get another go now that the token or address changed. */
+    private suspend fun retryTokenFailures() {
+        try {
+            dao.resetFailed(TOKEN_REJECTED_REASON)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // The setting is saved; the saves stay Failed and the user can still retry them by hand.
+        }
     }
 
     private fun showToken(token: String?) {
@@ -151,7 +167,7 @@ class SettingsViewModel(
     companion object {
         const val REACHABLE = "Reachable"
         const val UNREACHABLE = "Couldn't reach your desktop"
-        const val UNAUTHORIZED = "Desktop didn't accept the pairing token"
+        const val UNAUTHORIZED = TOKEN_REJECTED_REASON
         const val NOT_SET_UP = "Desktop not set up yet"
         const val BAD_ADDRESS = "That isn't an address yearn can reach"
         const val BAD_TOKEN = "A pairing token has no spaces or accents"

@@ -5,7 +5,10 @@ import androidx.lifecycle.viewModelScope
 import com.anujp.yearn.data.CaptureDao
 import com.anujp.yearn.data.CaptureEntity
 import com.anujp.yearn.data.SyncStatus
+import com.anujp.yearn.data.TOKEN_REJECTED_REASON
 import com.anujp.yearn.sync.SyncScheduler
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
@@ -71,7 +74,17 @@ class HomeViewModel(
         listOfNotNull(synced, if (waiting > 0) "$waiting waiting" else null).joinToString(" · ")
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), "")
 
-    fun syncNow() = scheduler.enqueueNow()
+    /** Also retries saves a wrong pairing token failed: after fixing it on the desktop, Sync is the obvious tap. */
+    fun syncNow(): Job = viewModelScope.launch {
+        try {
+            dao.resetFailed(TOKEN_REJECTED_REASON)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Still sync what is waiting.
+        }
+        scheduler.enqueueNow()
+    }
 
     /** A failed save starts over as Waiting with a fresh retry budget; anything else is left alone. */
     fun retry(id: String) {

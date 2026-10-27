@@ -103,4 +103,40 @@ class CaptureDaoTest {
         assertEquals(listOf("c"), dao.pendingUploads().map { it.id })
         assertEquals(0, dao.markInterruptedCopies())
     }
+
+    @Test
+    fun resetFailed_onlyTouchesFailedWithThatReason() = runTest {
+        val token = "Desktop didn't accept the pairing token"
+        dao.insertCapture(capture("tok", 1000, sync = SyncStatus.FAILED).copy(attempts = 3, lastError = token), emptyList())
+        dao.insertCapture(capture("rej", 2000, sync = SyncStatus.FAILED).copy(lastError = "Desktop rejected the file"), emptyList())
+        dao.insertCapture(capture("wait", 3000).copy(attempts = 2, lastError = token), emptyList())
+        dao.insertCapture(capture("up", 4000, sync = SyncStatus.UPLOADED), emptyList())
+
+        assertEquals(1, dao.resetFailed(token))
+
+        val tok = dao.get("tok")!!
+        assertEquals(SyncStatus.WAITING, tok.syncStatus)
+        assertEquals(0, tok.attempts)
+        assertEquals(null, tok.lastError)
+        assertEquals(SyncStatus.FAILED, dao.get("rej")!!.syncStatus)
+        assertEquals("Desktop rejected the file", dao.get("rej")!!.lastError)
+        assertEquals(2, dao.get("wait")!!.attempts)
+        assertEquals(SyncStatus.UPLOADED, dao.get("up")!!.syncStatus)
+        assertEquals(0, dao.resetFailed(token))
+    }
+
+    @Test
+    fun resetStaleUploading_turnsUploadingIntoWaiting() = runTest {
+        dao.insertCapture(capture("a", 1000, sync = SyncStatus.UPLOADING).copy(attempts = 2), emptyList())
+        dao.insertCapture(capture("b", 2000, sync = SyncStatus.UPLOADED), emptyList())
+        dao.insertCapture(capture("c", 3000, sync = SyncStatus.FAILED), emptyList())
+
+        assertEquals(1, dao.resetStaleUploading())
+
+        assertEquals(SyncStatus.WAITING, dao.get("a")!!.syncStatus)
+        assertEquals(2, dao.get("a")!!.attempts)
+        assertEquals(SyncStatus.UPLOADED, dao.get("b")!!.syncStatus)
+        assertEquals(SyncStatus.FAILED, dao.get("c")!!.syncStatus)
+        assertEquals(0, dao.resetStaleUploading())
+    }
 }

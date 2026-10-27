@@ -87,7 +87,10 @@ open class YearnApp : Application(), Configuration.Provider {
         val g = graph
         appScope.launch {
             try {
-                if (g.dao.markInterruptedCopies() > 0) g.scheduler.enqueueNow()
+                val interrupted = g.dao.markInterruptedCopies()
+                // An upload the last process died in would otherwise show Uploading until WorkManager reruns.
+                val stale = g.dao.resetStaleUploading()
+                if (interrupted > 0 || stale > 0) g.scheduler.enqueueNow()
             } finally {
                 // Never block shares forever, even if recovery itself failed.
                 recovery.complete(Unit)

@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
                 val power = app.getSystemService(PowerManager::class.java)
                 SettingsViewModel(
                     graph.settings,
+                    graph.dao,
                     graph.clientFactory,
                     power = { power?.isIgnoringBatteryOptimizations(app.packageName) ?: true },
                     scheduler = graph.scheduler,

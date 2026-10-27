@@ -7,6 +7,9 @@ enum class SyncStatus { WAITING, UPLOADING, UPLOADED, FAILED }
 
 enum class FileState { PENDING, DONE, ERROR }
 
+/** The failure reason a wrong pairing token leaves; fixing the token or address retries exactly these. */
+const val TOKEN_REJECTED_REASON = "Desktop didn't accept the pairing token"
+
 const val INTERRUPTED_COPY_ERROR = "Copy interrupted: yearn was closed before this file finished copying"
 
 @Entity("captures")
