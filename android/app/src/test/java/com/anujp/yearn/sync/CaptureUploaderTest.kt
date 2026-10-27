@@ -9,6 +9,9 @@ import com.anujp.yearn.data.FileEntity
 import com.anujp.yearn.data.FileState
 import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.data.YearnDatabase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -193,6 +196,21 @@ class CaptureUploaderTest {
         assertNull(c.lastError)
         val rec = receiver.commits.single()
         assertEquals(sha, rec["files"]!!.jsonArray[0].jsonObject["sha256"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun concurrentPasses_serialize_eachCaptureCheckedOnce() = runBlocking {
+        val (f, sha) = makeFile("c.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        val u = uploader()
+        val outs = listOf(
+            async(Dispatchers.IO) { u.uploadPending() },
+            async(Dispatchers.IO) { u.uploadPending() },
+        ).awaitAll()
+        assertEquals(1, receiver.log.count { it == "GET /v1/captures/$id" })
+        assertEquals(1, receiver.commits.size)
+        assertEquals(1, outs.sumOf { it.uploaded })
+        assertEquals(SyncStatus.UPLOADED, dao.get(id)!!.syncStatus)
     }
 
     @Test

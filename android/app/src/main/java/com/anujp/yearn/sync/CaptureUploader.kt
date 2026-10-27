@@ -9,6 +9,8 @@ import com.anujp.yearn.data.Timestamps
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.time.ZonedDateTime
 
@@ -25,7 +27,12 @@ class CaptureUploader(
 ) : PendingUploader {
     private enum class Next { CONTINUE, CONTINUE_RETRY, STOP_RETRY, STOP_NO_RETRY }
 
-    override suspend fun uploadPending(): UploadOutcome {
+    /** The app shares one uploader; a second concurrent pass could overwrite a fresh Uploaded with Waiting. */
+    private val runLock = Mutex()
+
+    override suspend fun uploadPending(): UploadOutcome = runLock.withLock { uploadPendingLocked() }
+
+    private suspend fun uploadPendingLocked(): UploadOutcome {
         val pending = dao.pendingUploads()
         if (pending.isEmpty()) return UploadOutcome(0, false)
         val c = client()

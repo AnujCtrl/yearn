@@ -2,7 +2,15 @@ package com.anujp.yearn.sync
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.BackoffPolicy
 import androidx.work.Configuration
+import androidx.work.WorkInfo
+import androidx.work.impl.WorkManagerImpl
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertTrue
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import androidx.work.ListenableWorker
 import androidx.work.NetworkType
 import androidx.work.WorkManager
@@ -24,6 +32,7 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 class SyncSchedulingTest {
     private lateinit var context: Context
+    private val direct = Executor { it.run() }
 
     @Before
     fun setUp() {
@@ -36,12 +45,55 @@ class SyncSchedulingTest {
 
     @Test
     fun enqueueNow_requiresNetworkAndIsUnique() {
-        val s = WorkSyncScheduler(context)
-        s.enqueueNow()
+        val s = WorkSyncScheduler(context, direct)
         s.enqueueNow()
         val infos = WorkManager.getInstance(context).getWorkInfosForUniqueWork("yearn-sync-now").get()
-        assertEquals(2, infos.size) // APPEND_OR_REPLACE chains the second behind the first
-        infos.forEach { assertEquals(NetworkType.CONNECTED, it.constraints.requiredNetworkType) }
+        assertEquals(1, infos.size)
+        assertEquals(NetworkType.CONNECTED, infos.single().constraints.requiredNetworkType)
+        val spec = WorkManagerImpl.getInstance(context).workDatabase.workSpecDao().getWorkSpec(infos.single().id.toString())!!
+        assertEquals(BackoffPolicy.EXPONENTIAL, spec.backoffPolicy)
+        assertEquals(30_000L, spec.backoffDelayDuration)
+    }
+
+    @Test
+    fun enqueueNow_replacesPredecessorInBackoff_notChainedBehindIt() {
+        val s = WorkSyncScheduler(context, direct)
+        s.enqueueNow() // no network in the test driver: stays ENQUEUED, like a run sleeping in backoff
+        s.enqueueNow()
+        val infos = WorkManager.getInstance(context).getWorkInfosForUniqueWork("yearn-sync-now").get()
+        val live = infos.filter { !it.state.isFinished }
+        assertEquals(1, live.size)
+        assertEquals(WorkInfo.State.ENQUEUED, live.single().state)
+        assertTrue(infos.none { it.state == WorkInfo.State.BLOCKED })
+    }
+
+    @Test
+    fun enqueueNow_appendsBehindARunningPass() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        WorkManagerTestInitHelper.initializeTestWorkManager(
+            context,
+            Configuration.Builder()
+                .setExecutor(Executors.newCachedThreadPool())
+                .setWorkerFactory(object : WorkerFactory() {
+                    override fun createWorker(c: Context, name: String, p: WorkerParameters): ListenableWorker =
+                        SyncWorker(c, p, PendingUploader { started.complete(Unit); gate.await(); UploadOutcome(0, false) }, SettingsStore(c, XorBox()))
+                }).build(),
+        )
+        val wm = WorkManager.getInstance(context)
+        val s = WorkSyncScheduler(context, direct)
+        s.enqueueNow()
+        val first = wm.getWorkInfosForUniqueWork("yearn-sync-now").get().single().id
+        WorkManagerTestInitHelper.getTestDriver(context)!!.setAllConstraintsMet(first)
+        withTimeout(10_000) { started.await() }
+        assertEquals(WorkInfo.State.RUNNING, wm.getWorkInfoById(first).get()!!.state)
+
+        s.enqueueNow()
+        val infos = wm.getWorkInfosForUniqueWork("yearn-sync-now").get()
+        assertEquals(2, infos.size)
+        assertEquals(WorkInfo.State.BLOCKED, infos.single { it.id != first }.state)
+        gate.complete(Unit)
+        Unit
     }
 
     @Test
