@@ -80,6 +80,21 @@ abstract class CaptureDao {
     )
     protected abstract suspend fun completeCapturesWithoutPending(): Int
 
+    @Query("UPDATE files SET state = 'ERROR', error = :error WHERE captureId = :id AND state = 'PENDING'")
+    protected abstract suspend fun failPendingFilesOf(id: String, error: String): Int
+
+    /** Unlike [setFilesComplete], keeps whatever thumbnail the capture already has. */
+    @Query("UPDATE captures SET filesComplete = 1 WHERE id = :id")
+    protected abstract suspend fun completeCapture(id: String): Int
+
+    /** [markInterruptedCopies] for one capture whose copy stopped while the process lives on. */
+    @Transaction
+    open suspend fun markInterruptedCopy(id: String): Int {
+        val n = failPendingFilesOf(id, INTERRUPTED_COPY_ERROR)
+        completeCapture(id)
+        return n
+    }
+
     /** Process-start recovery: copies that never finished become errors; returns how many files. */
     @Transaction
     open suspend fun markInterruptedCopies(): Int {

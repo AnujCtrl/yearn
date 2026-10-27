@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
 
 sealed interface SheetState {
@@ -35,15 +36,20 @@ sealed interface SheetState {
  * and [start] only ever captures once per ViewModel. Nothing here finishes while [SheetState.Saving]:
  * finishing the activity ends the sender's read grant on its content URIs.
  *
- * [saved] carries a started marker (set before [CaptureService.begin]) and the capture id across
- * process death: a restored activity finds them and finishes instead of capturing the share again.
- * Startup recovery has already marked that capture's unfinished copies as errors.
+ * [saved] carries the capture id, picked here and saved before [CaptureService.begin], across process
+ * death. A restored activity whose capture row exists finishes instead of capturing the share again
+ * (startup recovery has already marked its unfinished copies as errors); if the old process died before
+ * the row committed, the share is begun again under the same id.
+ *
+ * If this ViewModel is cleared for good (not a fold/unfold recreate) before its copy finished, the files
+ * still pending are marked interrupted and the capture is queued, so it still uploads.
  */
 class CaptureViewModel(
     private val service: CaptureService,
     private val saved: SavedStateHandle = SavedStateHandle(),
     private val savedHoldMillis: Long = SAVED_HOLD_MILLIS,
     private val retryMillis: Long = RETRY_MILLIS,
+    private val newId: () -> String = { UUID.randomUUID().toString() },
 ) : ViewModel() {
     private val _state = MutableStateFlow<SheetState>(SheetState.Catching)
     val state: StateFlow<SheetState> = _state.asStateFlow()
@@ -52,21 +58,40 @@ class CaptureViewModel(
     private var hold: Job? = null
     private var closing = false
 
+    /** The capture this ViewModel is saving, until its files are all copied. */
+    @Volatile private var copying: String? = null
+
     /** Captures [intent] once; later calls (a recreated activity) do nothing. */
     fun start(intent: Intent, hints: () -> SourceHints) {
         if (started) return
         started = true
-        if (saved.get<Boolean>(KEY_STARTED) == true) {
-            // Process-death restore: this share was already caught by the previous process.
-            _state.value = SheetState.Finished
+        val restored = saved.get<String>(KEY_CAPTURE_ID)
+        val sourceHints = hints()
+        if (restored == null) {
+            val id = newId()
+            saved[KEY_CAPTURE_ID] = id
+            capture(intent, sourceHints, id)
             return
         }
-        saved[KEY_STARTED] = true
-        val sourceHints = hints()
+        // Process-death restore: the previous process either committed this share or died first.
         viewModelScope.launch {
-            val first = beginUntilCommitted(intent, sourceHints)
-            saved[KEY_CAPTURE_ID] = first.captureId
+            val committed = try {
+                service.exists(restored)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false // begin is idempotent per id: it returns the row if there is one after all
+            }
+            if (committed) _state.value = SheetState.Finished else capture(intent, sourceHints, restored)
+        }
+    }
+
+    private fun capture(intent: Intent, hints: SourceHints, id: String) {
+        copying = id
+        viewModelScope.launch {
+            val first = beginUntilCommitted(intent, hints, id)
             val done = if (first.complete) first else copyUntilDone(first)
+            copying = null
             move(SheetState.Saved(done))
             hold = launch {
                 delay(savedHoldMillis)
@@ -76,10 +101,10 @@ class CaptureViewModel(
     }
 
     /** Keeps the intent in memory and retries until the row is committed (e.g. disk full). */
-    private suspend fun beginUntilCommitted(intent: Intent, hints: SourceHints): CaptureProgress {
+    private suspend fun beginUntilCommitted(intent: Intent, hints: SourceHints, id: String): CaptureProgress {
         while (true) {
             try {
-                return service.begin(intent, hints)
+                return service.begin(intent, hints, id)
             } catch (e: CaptureFailed) {
                 move(SheetState.StorageError(STORAGE_ERROR))
                 delay(retryMillis)
@@ -163,11 +188,16 @@ class CaptureViewModel(
         }
     }
 
+    /** Not called on a fold/unfold recreate: only when the sheet is gone for good. */
+    override fun onCleared() {
+        copying?.let { service.interruptCopy(it) }
+        super.onCleared()
+    }
+
     companion object {
         const val SAVED_HOLD_MILLIS = 1000L
         const val RETRY_MILLIS = 2000L
         const val STORAGE_ERROR = "Couldn't save on this phone. Trying again…"
-        const val KEY_STARTED = "capture.started"
         const val KEY_CAPTURE_ID = "capture.id"
     }
 }

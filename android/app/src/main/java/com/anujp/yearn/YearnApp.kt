@@ -49,7 +49,7 @@ class AppGraph(
         ): AppGraph {
             val app = context.applicationContext
             val dao = db.captureDao()
-            val copier = FileCopier(app.contentResolver, File(app.filesDir, "captures"))
+            val copier = FileCopier(app.contentResolver, File(app.filesDir, "captures"), FileCopier.privateDirs(app))
             val thumbs = File(app.filesDir, "thumbs")
             val service = CaptureService(
                 dao, copier, scheduler, thumbs, deviceJson(app), beforeFirstCapture = recovery,

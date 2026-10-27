@@ -124,6 +124,33 @@ class FileCopierTest {
     }
 
     @Test
+    fun fileUriInsideOwnDataDir_isRefused() = runTest {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val secret = File(ctx.filesDir, "datastore/settings.preferences_pb").apply {
+            parentFile!!.mkdirs()
+            writeText("token")
+        }
+        val cached = File(ctx.cacheDir, "x.bin").apply { writeText("x") }
+        val copier = FileCopier(resolver, capturesDir, FileCopier.privateDirs(ctx))
+        val sneaky = Uri.parse("file://" + File(ctx.cacheDir, "../files/datastore/settings.preferences_pb").path)
+        for (uri in listOf(Uri.fromFile(secret), Uri.fromFile(cached), sneaky, Uri.fromFile(ctx.dataDir))) {
+            val result = copier.copy("cap4", 0, uri)
+            assertTrue("$uri -> $result", result is CopyResult.Failed)
+            assertEquals("Couldn't read this file: not allowed", (result as CopyResult.Failed).error)
+        }
+        assertEquals(emptyList<String>(), File(capturesDir, "cap4").list()?.toList() ?: emptyList<String>())
+    }
+
+    @Test
+    fun fileUriOutsideDataDir_stillCopies() = runTest {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val outside = tmp.newFile("shared.txt").apply { writeText("hello") }
+        val result = FileCopier(resolver, capturesDir, FileCopier.privateDirs(ctx)).copy("cap5", 0, Uri.fromFile(outside))
+        assertTrue("$result", result is CopyResult.Done)
+        assertEquals(5L, (result as CopyResult.Done).size)
+    }
+
+    @Test
     fun thumbnails_nonMediaReturnsNull() {
         val src = tmp.newFile("notes.txt").also { it.writeText("hello") }
         val out = File(tmp.root, "thumb.jpg")

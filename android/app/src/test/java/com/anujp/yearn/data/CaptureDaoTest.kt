@@ -139,4 +139,22 @@ class CaptureDaoTest {
         assertEquals(SyncStatus.FAILED, dao.get("c")!!.syncStatus)
         assertEquals(0, dao.resetStaleUploading())
     }
+
+    @Test
+    fun markInterruptedCopy_touchesOnlyThatCaptureAndKeepsItsThumb() = runTest {
+        dao.insertCapture(capture("a", filesComplete = false).copy(thumbPath = "/t/a.jpg"), listOf(
+            file("a", 0, FileState.DONE).copy(sha256 = "a".repeat(64)),
+            file("a", 1, FileState.PENDING),
+        ))
+        dao.insertCapture(capture("b", 2000, filesComplete = false), listOf(file("b", 0, FileState.PENDING)))
+
+        assertEquals(1, dao.markInterruptedCopy("a"))
+
+        assertEquals(listOf(FileState.DONE, FileState.ERROR), dao.files("a").map { it.state })
+        assertEquals(INTERRUPTED_COPY_ERROR, dao.files("a")[1].error)
+        assertTrue(dao.get("a")!!.filesComplete)
+        assertEquals("/t/a.jpg", dao.get("a")!!.thumbPath)
+        assertEquals(FileState.PENDING, dao.files("b").single().state)
+        assertFalse(dao.get("b")!!.filesComplete)
+    }
 }

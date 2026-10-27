@@ -7,10 +7,13 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.anujp.yearn.data.CaptureDao
 import com.anujp.yearn.data.FileState
+import com.anujp.yearn.data.INTERRUPTED_COPY_ERROR
 import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.data.YearnDatabase
 import com.anujp.yearn.sync.SyncScheduler
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -228,5 +231,67 @@ class CaptureServiceTest {
         assertEquals(listOf(0, 1), copier.calls)
         assertEquals(1, scheduler.now)
         assertTrue(dao.get("cap-1")!!.filesComplete)
+    }
+
+    @Test
+    fun begin_usesTheGivenId() = runTest {
+        val p = service().begin(textIntent(), hints, id = "given-id")
+        assertEquals("given-id", p.captureId)
+        assertNotNull(dao.get("given-id"))
+        assertNull(dao.get("cap-1"))
+    }
+
+    @Test
+    fun begin_sameIdTwice_keepsOneCapture() = runTest {
+        val svc = service()
+        svc.begin(streamIntent(2), hints, id = "same")
+        val again = svc.begin(streamIntent(2), hints, id = "same")
+        assertEquals("same", again.captureId)
+        assertEquals(2, again.filesTotal)
+        assertFalse(again.complete)
+        assertEquals(1, dao.observeAll().first().size)
+    }
+
+    @Test
+    fun begin_enqueueFailure_stillCommitsOnce() = runTest {
+        val throwing = object : SyncScheduler {
+            override fun enqueueNow() = throw IllegalStateException("WorkManager not initialized")
+            override fun ensureDaily() = Unit
+        }
+        val svc = CaptureService(dao, FakeCopier(), throwing, thumbsDir, device, clock = { now }, newId = { "cap-1" })
+        val p = svc.begin(textIntent(), hints)
+        assertTrue(p.complete)
+        assertEquals(1, dao.observeAll().first().size)
+    }
+
+    @Test
+    fun interruptCopy_marksPendingFilesAndCompletesCapture() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val copier = FakeCopier { _, i -> if (i == 1) { entered.complete(Unit); gate.await() } }
+        val svc = service(copier)
+        svc.begin(streamIntent(3), hints)
+        val copy = launch(Dispatchers.IO) { svc.copyFiles("cap-1") {} }
+        entered.await()
+        copy.cancel()
+        svc.interruptCopy("cap-1").join()
+
+        val files = dao.files("cap-1")
+        assertEquals(listOf(FileState.DONE, FileState.ERROR, FileState.ERROR), files.map { it.state })
+        assertEquals(INTERRUPTED_COPY_ERROR, files[1].error)
+        assertTrue(dao.get("cap-1")!!.filesComplete)
+        assertEquals(1, scheduler.now)
+        assertEquals(listOf("cap-1"), dao.pendingUploads().map { it.id })
+    }
+
+    @Test
+    fun interruptCopy_afterCompletion_changesNothing() = runTest {
+        val svc = service()
+        svc.begin(streamIntent(1), hints)
+        svc.copyFiles("cap-1") {}
+        val before = scheduler.now
+        svc.interruptCopy("cap-1").join()
+        assertEquals(FileState.DONE, dao.files("cap-1").single().state)
+        assertEquals(before, scheduler.now)
     }
 }

@@ -66,6 +66,8 @@ private class FakeCaptureDao : CaptureDao() {
         return n
     }
     override suspend fun resetStaleUploading(): Int = 0
+    override suspend fun failPendingFilesOf(id: String, error: String): Int = 0
+    override suspend fun completeCapture(id: String): Int = 0
     override suspend fun completeCapturesWithoutPending(): Int = 0
 }
 

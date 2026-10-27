@@ -1,6 +1,7 @@
 package com.anujp.yearn.capture
 
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import kotlinx.coroutines.CancellationException
@@ -37,6 +38,7 @@ interface Copier {
 class FileCopier(
     private val resolver: ContentResolver,
     private val capturesDir: File,
+    private val privateDirs: List<File> = emptyList(),
 ) : Copier {
     override suspend fun copy(
         captureId: String,
@@ -44,6 +46,7 @@ class FileCopier(
         uri: Uri,
         onBytes: (Long) -> Unit,
     ): CopyResult = withContext(Dispatchers.IO) {
+        if (isPrivateFile(uri)) return@withContext CopyResult.Failed(uri.lastPathSegment, NOT_ALLOWED)
         val displayName = queryDisplayName(uri)
         val dir = File(capturesDir, captureId)
         val part = File(dir, "$index.part")
@@ -93,6 +96,20 @@ class FileCopier(
         }
     }
 
+    /**
+     * A `file://` stream that resolves (through `..` or symlinks) into yearn's own storage, where the
+     * sealed pairing token and the database live, is never copied out and uploaded.
+     */
+    private fun isPrivateFile(uri: Uri): Boolean {
+        if (!uri.scheme.equals("file", ignoreCase = true)) return false
+        val path = uri.path ?: return true
+        val target = runCatching { File(path).canonicalPath }.getOrNull() ?: return true
+        return privateDirs.any { dir ->
+            val root = runCatching { dir.canonicalPath }.getOrNull() ?: return@any false
+            target == root || target.startsWith(root + File.separator)
+        }
+    }
+
     private fun cleanup(part: File) {
         runCatching { part.delete() }
     }
@@ -108,7 +125,12 @@ class FileCopier(
         }
     }.getOrNull()
 
-    private companion object {
-        const val BUFFER_SIZE = 64 * 1024
+    companion object {
+        private const val BUFFER_SIZE = 64 * 1024
+
+        const val NOT_ALLOWED = "Couldn't read this file: not allowed"
+
+        /** yearn's own storage, which a shared `file://` URI must never reach into. */
+        fun privateDirs(context: Context): List<File> = listOf(context.dataDir, context.filesDir, context.cacheDir)
     }
 }

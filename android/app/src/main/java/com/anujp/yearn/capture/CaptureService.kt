@@ -12,6 +12,13 @@ import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.data.Timestamps
 import com.anujp.yearn.sync.SyncScheduler
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -65,16 +72,23 @@ class CaptureService(
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val beforeFirstCapture: suspend () -> Unit = {},
     private val thumbnailer: (File, String?, File) -> File? = Thumbnails::make,
+    /** Outlives any one screen: the service is an app-wide singleton. */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) {
     private val copyLocks = ConcurrentHashMap<String, Mutex>()
     private val gate = Mutex()
     private var gateDone = false
 
-    suspend fun begin(intent: Intent, hints: SourceHints): CaptureProgress {
+    /**
+     * Commits the capture row under [id]. The caller picks the id up front (and saves it) so a share
+     * restored after process death is begun again under the same id; a row that already exists is
+     * returned as it is, never inserted twice.
+     */
+    suspend fun begin(intent: Intent, hints: SourceHints, id: String = newId()): CaptureProgress {
         try {
             awaitStartupRecovery()
+            dao.get(id)?.let { return progressOf(it) }
             val parsed = RawShareParser.parse(intent, hints)
-            val id = newId()
             val at = clock()
             val streams = parsed.streamUris
             val complete = streams.isEmpty()
@@ -106,10 +120,13 @@ class CaptureService(
                 )
             }
             dao.insertCapture(capture, files)
-            if (complete) scheduler.enqueueNow()
+            // The row is committed: a scheduler failure must not make the caller begin (and insert) again.
+            if (complete) runCatching { scheduler.enqueueNow() }
             return CaptureProgress(id, parsed.preview, null, streams.size, 0, 0L, null, complete)
         } catch (e: CancellationException) {
-            throw e
+            // Only our own cancellation propagates; Room reports a closed database as a foreign one.
+            currentCoroutineContext().ensureActive()
+            throw CaptureFailed(e)
         } catch (e: Exception) {
             throw CaptureFailed(e)
         }
@@ -174,6 +191,36 @@ class CaptureService(
         dao.setFilesComplete(captureId, thumbPath)
         scheduler.enqueueNow()
         report(thumbPath, true)
+    }
+
+    private suspend fun progressOf(c: CaptureEntity): CaptureProgress {
+        val files = dao.files(c.id)
+        return CaptureProgress(
+            c.id, SharePreview(c.previewTitle, c.previewText, c.previewUrl, c.sourceLabel), c.thumbPath,
+            files.size, files.count { it.state != FileState.PENDING }, 0L, null, c.filesComplete,
+        )
+    }
+
+    /** True once the capture row is committed. */
+    suspend fun exists(captureId: String): Boolean = dao.get(captureId) != null
+
+    /**
+     * The share sheet went away for good while files were still copying, with the process alive: the
+     * sender's read grant goes with it. Files not yet copied become interrupted-copy errors and the
+     * capture is queued for upload, as startup recovery would do after a process death. Runs in the
+     * service's own scope, so it outlives the sheet's ViewModel; waits for the cancelled copy to unwind.
+     */
+    fun interruptCopy(captureId: String): Job = scope.launch(NonCancellable) {
+        try {
+            copyLocks.computeIfAbsent(captureId) { Mutex() }.withLock {
+                val c = dao.get(captureId) ?: return@withLock
+                if (c.filesComplete) return@withLock
+                dao.markInterruptedCopy(captureId)
+                runCatching { scheduler.enqueueNow() }
+            }
+        } catch (_: Exception) {
+            // Startup recovery catches whatever this could not.
+        }
     }
 
     suspend fun saveNote(captureId: String, note: String) {
