@@ -45,7 +45,7 @@ class AppGraph(
     }
 }
 
-class YearnApp : Application() {
+open class YearnApp : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val recovery = CompletableDeferred<Unit>()
     private val defaultGraph: AppGraph by lazy { AppGraph.build(this, recovery = { recovery.await() }) }
