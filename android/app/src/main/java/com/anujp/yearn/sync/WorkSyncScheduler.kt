@@ -27,21 +27,26 @@ class WorkSyncScheduler(
             .setConstraints(connected)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, Duration.ofSeconds(30))
             .build()
-        val wm = WorkManager.getInstance(app)
         executor.execute {
-            // A running pass may already have read the pending list, so queue one more behind it. Anything
-            // else (nothing, backing off, blocked, finished) is replaced so a fresh share never waits
-            // behind a predecessor that is sleeping in backoff.
-            val running = try {
-                wm.getWorkInfosForUniqueWork(NOW).get().any { it.state == WorkInfo.State.RUNNING }
+            // An exception here would kill the app from the executor thread. Losing one enqueue is fine:
+            // the next share, Sync now, a settings change or the daily job enqueues again.
+            try {
+                val wm = WorkManager.getInstance(app)
+                // A running pass may already have read the pending list, so queue one more behind it. Anything
+                // else (nothing, backing off, blocked, finished) is replaced so a fresh share never waits
+                // behind a predecessor that is sleeping in backoff.
+                val running = try {
+                    wm.getWorkInfosForUniqueWork(NOW).get().any { it.state == WorkInfo.State.RUNNING }
+                } catch (_: Exception) {
+                    false
+                }
+                wm.enqueueUniqueWork(
+                    NOW,
+                    if (running) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,
+                    req,
+                )
             } catch (_: Exception) {
-                false
             }
-            wm.enqueueUniqueWork(
-                NOW,
-                if (running) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.REPLACE,
-                req,
-            )
         }
     }
 

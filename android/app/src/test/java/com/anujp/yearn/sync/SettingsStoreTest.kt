@@ -53,4 +53,16 @@ class SettingsStoreTest {
         })
         assertNull(broken.token())
     }
+
+    @Test
+    fun corruptFile_isReplacedWithEmptySettings() = runBlocking {
+        val file = File(context.filesDir, "datastore/settings.preferences_pb")
+        file.parentFile!!.mkdirs()
+        file.writeBytes(ByteArray(64) { 0xFF.toByte() })
+        val store = SettingsStore(context, XorBox())
+        assertEquals("http://desktop:8787", store.baseUrl.first())
+        assertNull(store.token())
+        store.setBaseUrl("http://x:1")
+        assertEquals("http://x:1", store.baseUrl.first())
+    }
 }

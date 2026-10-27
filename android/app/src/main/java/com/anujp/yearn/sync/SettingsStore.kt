@@ -3,9 +3,11 @@ package com.anujp.yearn.sync
 import android.content.Context
 import android.util.Base64
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +68,12 @@ class SettingsStore(context: Context, private val box: SecretBox) {
         /** One DataStore per file per process; a second instance on the same file would throw. */
         private fun dataStoreFor(file: File): DataStore<Preferences> = synchronized(stores) {
             stores.getOrPut(file.absolutePath) {
-                PreferenceDataStoreFactory.create(scope = scope) { file }
+                // A corrupt file (torn write, bad flash) starts over empty instead of throwing on every read;
+                // the user re-enters the token and captures wait as "Desktop not set up yet" meanwhile.
+                PreferenceDataStoreFactory.create(
+                    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+                    scope = scope,
+                ) { file }
             }
         }
     }
