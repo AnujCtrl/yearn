@@ -75,6 +75,7 @@ import com.anujp.yearn.ui.glass.GlassIcons
 import com.anujp.yearn.ui.glass.LargeTitle
 import com.anujp.yearn.ui.glass.LocalYearnColors
 import com.anujp.yearn.ui.glass.YearnType
+import com.anujp.yearn.ui.glass.blocksTouchesBelow
 import com.anujp.yearn.ui.glass.bottomHairline
 import com.anujp.yearn.ui.home.safeInsets
 import dev.chrisbanes.haze.hazeSource
@@ -150,7 +151,7 @@ fun SettingsScreen(
     val insets = safeInsets.asPaddingValues()
     val top = insets.calculateTopPadding()
 
-    Box(modifier.fillMaxSize().background(colors.background)) {
+    Box(modifier.fillMaxSize().blocksTouchesBelow().background(colors.background)) {
         Column(
             Modifier
                 .fillMaxSize()

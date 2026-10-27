@@ -96,6 +96,7 @@ import com.anujp.yearn.ui.glass.GlassStyle
 import com.anujp.yearn.ui.glass.LocalYearnColors
 import com.anujp.yearn.ui.glass.YearnColors
 import com.anujp.yearn.ui.glass.YearnType
+import com.anujp.yearn.ui.glass.blocksTouchesBelow
 import com.anujp.yearn.ui.glass.bottomHairline
 import com.anujp.yearn.ui.glass.cssBlur
 import com.anujp.yearn.ui.glass.glass
@@ -234,7 +235,7 @@ fun DetailScreen(
     val context = LocalContext.current
     val c = capture
     if (c == null) {
-        Box(modifier.fillMaxSize().background(colors.background))
+        Box(modifier.fillMaxSize().blocksTouchesBelow().background(colors.background))
         return
     }
 
@@ -260,7 +261,9 @@ fun DetailScreen(
             )
         }
 
-        BoxWithConstraints(modifier.fillMaxSize().background(if (pane) colors.background else Color.Black)) {
+        BoxWithConstraints(
+            modifier.fillMaxSize().blocksTouchesBelow().background(if (pane) colors.background else Color.Black),
+        ) {
             val insets = safeInsets.asPaddingValues()
             val top = insets.calculateTopPadding()
             if (pane) {

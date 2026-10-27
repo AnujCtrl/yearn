@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -312,6 +313,17 @@ fun Modifier.glass(
 
 private fun RoundRect.shiftedDown(dy: Float) =
     RoundRect(left, top + dy, right, bottom + dy, CornerRadius(topLeftCornerRadius.x, topLeftCornerRadius.y))
+
+/**
+ * For a full-screen layer drawn over another screen that stays composed (the list under the
+ * detail): every touch inside lands here, so empty areas never fall through to what is underneath.
+ * Descendants still get their touches first.
+ */
+fun Modifier.blocksTouchesBelow(): Modifier = this.pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) awaitPointerEvent()
+    }
+}
 
 /** Click without a Material ripple: the target dims and shrinks a touch while pressed. */
 @Composable

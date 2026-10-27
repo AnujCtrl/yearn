@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -91,6 +92,10 @@ fun YearnRoot(
             val twoPane = maxWidth >= TwoPaneMinWidth
             BackHandler(enabled = !settingsOpen && !twoPane && detailOpen) { detailOpen = false }
             BackHandler(enabled = settingsOpen) { settingsOpen = false }
+            // What an overlay covers stays composed (it keeps its scroll) but leaves the semantics tree,
+            // so TalkBack can't walk into it. Touches are stopped by the overlays themselves.
+            val detailCovers = !twoPane && detailOpen && selectedId != null
+            fun covered(by: Boolean) = if (by) Modifier.clearAndSetSemantics {} else Modifier
 
             if (twoPane) {
                 // The pane is never empty while there are saves: default to the newest.
@@ -102,6 +107,7 @@ fun YearnRoot(
                     onSync = onSync,
                     onRetry = onRetry,
                     onOpenSettings = { settingsOpen = true },
+                    modifier = covered(settingsOpen),
                     detail = { id, paneStart -> detail(id, true, paneStart) {} },
                 )
             } else {
@@ -116,6 +122,7 @@ fun YearnRoot(
                         selectedId = it
                         detailOpen = true
                     },
+                    modifier = covered(settingsOpen || detailCovers),
                 )
                 val id = selectedId
                 AnimatedVisibility(
