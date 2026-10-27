@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Yearn" parent="android:Theme.DeviceDefault.NoActionBar" />
+    <!-- The list's background, so the window never flashes dark before the first frame in light mode. -->
+    <style name="Theme.Yearn" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/yearn_background</item>
+    </style>
 
     <style name="Theme.Yearn.Capture" parent="android:Theme.DeviceDefault.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>

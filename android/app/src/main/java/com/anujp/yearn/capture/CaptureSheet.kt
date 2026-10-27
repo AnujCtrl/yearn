@@ -1,7 +1,6 @@
 package com.anujp.yearn.capture
 
 import android.graphics.BitmapFactory
-import android.graphics.BlurMaskFilter
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
@@ -52,27 +51,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.clipPath
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -88,7 +75,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.anujp.yearn.ui.glass.GlassStyle
 import com.anujp.yearn.ui.glass.InterFamily
+import com.anujp.yearn.ui.glass.glass
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -128,6 +117,10 @@ private val TouchTarget = 48.dp
 /** The 48 dp touch box sticks out this far past the 34 dp ring on each side. */
 private val TouchSlack = (TouchTarget - DotRing) / 2
 private val DismissDrag = 80.dp
+private val SheetGlass = GlassStyle(
+    fill = GlassFill, border = GlassBorder, borderWidth = 1.dp, highlight = GlassHighlight,
+    shadow = GlassShadow, shadowOffsetY = ShadowOffsetY, shadowBlur = ShadowBlur,
+)
 
 private val LabelText = TextStyle(
     fontFamily = InterFamily, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, lineHeight = 22.sp,
@@ -228,44 +221,13 @@ private fun GlassSheet(
                 }
             }
             .graphicsLayer { translationY = drag.value }
-            .glass(SheetRadius)
+            .glass(SheetRadius, SheetGlass)
             .animateContentSize(spring(dampingRatio = 0.85f, stiffness = Spring.StiffnessMediumLow))
             // Bottom padding is short by the touch slack: every last row is 48 dp tall but reads as 34.
             .padding(start = SheetPadding, top = SheetPadding, end = SheetPadding, bottom = SheetPadding - TouchSlack),
         content = content,
     )
 }
-
-private fun Modifier.glass(radius: Dp): Modifier = this
-    .drawWithCache {
-        val r = radius.toPx()
-        val b = 1.dp.toPx()
-        val outer = RoundRect(Rect(Offset.Zero, size), CornerRadius(r))
-        val sheet = Path().apply { addRoundRect(outer) }
-        val shadow = Path().apply { addRoundRect(outer.shiftedDown(ShadowOffsetY.toPx())) }
-        val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = GlassShadow.toArgb()
-            maskFilter = BlurMaskFilter(ShadowBlur.toPx(), BlurMaskFilter.Blur.NORMAL)
-        }
-        val shadowNative = shadow.asAndroidPath()
-        // inset 0 1px 0: a 1 dp crescent just inside the border along the top curve.
-        val inner = RoundRect(b, b, size.width - b, size.height - b, CornerRadius(r - b))
-        val highlight = Path().apply {
-            op(
-                Path().apply { addRoundRect(inner) },
-                Path().apply { addRoundRect(inner.shiftedDown(b)) },
-                PathOperation.Difference,
-            )
-        }
-        onDrawBehind {
-            // Like CSS box-shadow, the shadow never shows through the translucent fill.
-            clipPath(sheet, ClipOp.Difference) { drawIntoCanvas { it.nativeCanvas.drawPath(shadowNative, shadowPaint) } }
-            drawPath(sheet, GlassFill)
-            drawPath(highlight, GlassHighlight)
-        }
-    }
-    .border(1.dp, GlassBorder, RoundedCornerShape(radius))
-    .clip(RoundedCornerShape(radius))
 
 @Composable
 private fun PreviewBlock(progress: CaptureProgress, fraction: Float) {
@@ -447,6 +409,3 @@ internal fun formatBytes(n: Long): String = when {
     n < 1_000_000_000 -> String.format(Locale.ROOT, "%.1f MB", n / 1e6)
     else -> String.format(Locale.ROOT, "%.1f GB", n / 1e9)
 }
-
-private fun RoundRect.shiftedDown(dy: Float) =
-    RoundRect(left, top + dy, right, bottom + dy, CornerRadius(topLeftCornerRadius.x, topLeftCornerRadius.y))
