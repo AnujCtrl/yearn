@@ -52,6 +52,8 @@ class ReceiverDispatcher(private val token: String = "tok") : Dispatcher() {
     @Volatile var failStatusFor: String? = null
     @Volatile var commitReject: String? = null
     @Volatile var onCommit: (() -> Unit)? = null
+    /** Overrides the commit's 200 body (the receiver normally answers stored:true with a path). */
+    @Volatile var commitBody: String? = null
 
     private fun json(code: Int, body: String) =
         MockResponse().setResponseCode(code).setHeader("Content-Type", "application/json").setBody(body)
@@ -83,6 +85,7 @@ class ReceiverDispatcher(private val token: String = "tok") : Dispatcher() {
                 onCommit?.invoke()
                 commitReject?.let { return json(422, """{"error":"$it"}""") }
                 commits += Json.parseToJsonElement(request.body.readUtf8()).jsonObject
+                commitBody?.let { return json(200, it) }
                 storedIds += id
                 json(200, """{"stored":true,"path":"captures/2026/10/$id"}""")
             }
@@ -396,5 +399,87 @@ class CaptureUploaderTest {
         assertTrue(receiver.log.none { it.contains(id2) })
         assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
         assertEquals(SyncStatus.WAITING, dao.get(id2)!!.syncStatus)
+    }
+
+    /** Something that is not the receiver answers 200 with HTML (a captive portal, another web server). */
+    @Test
+    fun htmlOkToStatus_staysWaitingAndRetries() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) =
+                MockResponse().setResponseCode(200).setHeader("Content-Type", "text/html").setBody("<html>hi</html>")
+        }
+        // The production client (with the tailnet guard) on a loopback MockWebServer.
+        val c = ReceiverClient(server.url("/"), "tok", ReceiverClient.httpClient())
+        val out = uploader(c).uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        val cap = dao.get(id)!!
+        assertEquals(SyncStatus.WAITING, cap.syncStatus)
+        assertEquals("Couldn't reach your desktop", cap.lastError)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun wrongShapedJsonToStatus_staysWaiting() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) =
+                MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody("""{"ok":true}""")
+        }
+        val out = uploader(ReceiverClient(server.url("/"), "tok", ReceiverClient.httpClient())).uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
+        assertEquals("Couldn't reach your desktop", dao.get(id)!!.lastError)
+    }
+
+    @Test
+    fun redirect_isNotFollowed() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        val elsewhere = MockWebServer().apply { dispatcher = ReceiverDispatcher(); start() }
+        try {
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest) =
+                    MockResponse().setResponseCode(302).setHeader("Location", elsewhere.url(request.path!!).toString())
+            }
+            val out = uploader(ReceiverClient(server.url("/"), "tok", ReceiverClient.httpClient())).uploadPending()
+            assertEquals(0, elsewhere.requestCount)
+            assertEquals(UploadOutcome(0, true), out)
+            assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
+            assertEquals("Couldn't reach your desktop", dao.get(id)!!.lastError)
+        } finally {
+            elsewhere.shutdown()
+        }
+    }
+
+    @Test
+    fun httpClient_followsNoRedirects() {
+        val c = ReceiverClient.httpClient()
+        assertFalse(c.followRedirects)
+        assertFalse(c.followSslRedirects)
+        assertTrue(c.dns is TailnetDns)
+    }
+
+    @Test
+    fun commitNotStored_staysWaiting() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        receiver.commitBody = """{"stored":false}"""
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        val out = uploader().uploadPending()
+        assertEquals(UploadOutcome(0, true), out)
+        val c = dao.get(id)!!
+        assertEquals(SyncStatus.WAITING, c.syncStatus)
+        assertEquals("Couldn't reach your desktop", c.lastError)
+    }
+
+    @Test
+    fun commitWithoutPath_staysWaiting() = runBlocking {
+        val (f, sha) = makeFile("a.jpg", 100)
+        receiver.commitBody = """{"stored":true}"""
+        dao.insertCapture(capture(), listOf(doneFile(0, f, sha)))
+        assertEquals(UploadOutcome(0, true), uploader().uploadPending())
+        assertEquals(SyncStatus.WAITING, dao.get(id)!!.syncStatus)
     }
 }

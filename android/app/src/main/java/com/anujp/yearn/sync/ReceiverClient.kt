@@ -11,7 +11,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.boolean
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -22,6 +22,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 sealed class ReceiverError : Exception() {
@@ -55,12 +56,25 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
     private val jsonType = "application/json".toMediaType()
 
     companion object {
-        /** The receiver re-hashes and fsyncs before answering a commit, so reads need real headroom. */
-        fun httpClient(): OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(120, TimeUnit.SECONDS)
-            .writeTimeout(120, TimeUnit.SECONDS)
-            .build()
+        /**
+         * The receiver re-hashes and fsyncs before answering a commit, so reads need real headroom.
+         * Cleartext is only safe inside the tailnet: [TailnetDns] refuses every other address (names and IP
+         * literals alike), no proxy is used, and redirects are never followed, so the Bearer token cannot be
+         * sent anywhere else.
+         */
+        fun httpClient(): OkHttpClient {
+            val dns = TailnetDns()
+            return OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .writeTimeout(120, TimeUnit.SECONDS)
+                .dns(dns)
+                .addInterceptor(TailnetDns.LiteralGuard(dns))
+                .proxy(Proxy.NO_PROXY)
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .build()
+        }
 
         /** Trims the token; null (treated as "not set up") if it is blank or not a legal header value. */
         fun create(baseUrl: HttpUrl, token: String, http: OkHttpClient = httpClient()): ReceiverClient? {
@@ -76,12 +90,18 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
 
     suspend fun status(id: String): RemoteStatus {
         val body = call(request("v1", "captures", id).get().build())
+        // A 2xx that is not the receiver's answer means something else is listening there: wait and retry.
         return try {
             val o = Json.parseToJsonElement(body).jsonObject
-            val staged = o["staged"]?.jsonObject.orEmpty().entries.associate { (k, v) -> k.toInt() to v.jsonPrimitive.content }
-            RemoteStatus(o["stored"]?.jsonPrimitive?.booleanOrNull ?: false, staged)
+            val stored = (o["stored"] as JsonPrimitive).also { require(!it.isString) }.boolean
+            val staged = (o["staged"] as JsonObject).entries.associate { (k, v) ->
+                val p = v as JsonPrimitive
+                require(p.isString)
+                k.toInt() to p.content
+            }
+            RemoteStatus(stored, staged)
         } catch (e: Exception) {
-            throw ReceiverError.Rejected("bad_response", null)
+            throw notTheReceiver("status", e)
         }
     }
 
@@ -99,8 +119,20 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
             .post(record.toString().toRequestBody(jsonType))
             .build()
         val body = call(req)
-        return runCatching { Json.parseToJsonElement(body).jsonObject["path"]?.jsonPrimitive?.contentOrNull }.getOrNull() ?: ""
+        // Only an explicit stored:true with a path confirms the desktop has it; anything else is retried.
+        return try {
+            val o = Json.parseToJsonElement(body).jsonObject
+            val stored = o["stored"] as JsonPrimitive
+            val path = o["path"] as JsonPrimitive
+            require(!stored.isString && stored.boolean && path.isString)
+            path.content
+        } catch (e: Exception) {
+            throw notTheReceiver("commit", e)
+        }
     }
+
+    private fun notTheReceiver(what: String, e: Exception) =
+        ReceiverError.Unreachable(IOException("unexpected $what response", e))
 
     suspend fun putNote(id: String, note: String, noteUpdatedAt: String) {
         val payload = JsonObject(mapOf("note" to JsonPrimitive(note), "note_updated_at" to JsonPrimitive(noteUpdatedAt)))
@@ -125,6 +157,8 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
                     when {
                         resp.isSuccessful -> text
                         code == 401 -> throw ReceiverError.Unauthorized
+                        // Redirects are never followed; the receiver never sends one, so whatever did is not it.
+                        code in 300..399 -> throw ReceiverError.Unreachable(IOException("HTTP $code redirect not followed"))
                         code >= 500 -> throw ReceiverError.Unreachable(IOException("HTTP $code ${errorOf(text) ?: ""}".trim()))
                         code == 404 && notFoundIsNotStored -> throw ReceiverError.NotStored
                         else -> throw ReceiverError.Rejected(errorOf(text) ?: "http_$code", indexOf(text))

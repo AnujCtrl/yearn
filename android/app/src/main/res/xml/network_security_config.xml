@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <!--
-      The receiver is plain http://desktop:8787. The only peer this app ever talks to is the user's own
-      receiver, reached inside the Tailscale WireGuard tunnel, so cleartext HTTP is acceptable here.
+      The receiver is plain http://desktop:8787, reached inside the Tailscale WireGuard tunnel, so cleartext
+      HTTP is permitted here. The tunnel is enforced in code, not by this file: ReceiverClient's TailnetDns
+      guard only connects to Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48) or loopback, for host
+      names and IP literals alike, uses no proxy and follows no redirects. With Tailscale off the name does not
+      resolve to a tailnet address, nothing is sent, and captures stay Waiting.
     -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
