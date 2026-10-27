@@ -84,3 +84,17 @@ def test_serve_reindexes_then_runs_uvicorn(tmp_path, monkeypatch):
     assert cli.main(["serve", "--config", str(cfg)]) == 0
 
     assert calls == [{"host": "127.0.0.1", "port": 9999}]
+
+
+def test_serve_still_starts_with_junk_capture_folder(tmp_path, monkeypatch):
+    cfg = tmp_path / "receiver.toml"
+    write_config(cfg, tmp_path / "data")
+    junk = tmp_path / "data" / "captures" / "2026" / "10" / "junk"
+    junk.mkdir(parents=True)
+    (junk / "record.json").write_text("not json")
+    calls = []
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kw: calls.append(kw))
+
+    assert cli.main(["serve", "--config", str(cfg)]) == 0
+
+    assert calls == [{"host": "127.0.0.1", "port": 9999}]

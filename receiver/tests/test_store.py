@@ -282,3 +282,45 @@ async def test_cancelled_commit_does_not_let_retry_overlap(tmp_path, monkeypatch
     assert len(list((tmp_path / "captures").glob("*/*/*"))) == 1
     assert json.loads((tmp_path / path / "record.json").read_text())["id"] == cid
     assert len((tmp_path / "index.jsonl").read_text().splitlines()) == 1
+
+
+# -- final-review fixes ------------------------------------------------------
+
+
+def test_safe_name_keeps_extension():
+    assert safe_name("画像.png") == "file.png"
+    long = safe_name("a" * 200 + ".mp4")
+    assert long.endswith(".mp4") and len(long) <= 80
+    assert safe_name("../../etc/passwd") == "etc_passwd"
+    assert safe_name("") == "file"
+    assert len(safe_name("x" * 300)) == 80
+    assert not safe_name(".bashrc").startswith(".")
+
+
+async def test_error_null_beside_sha_is_treated_as_absent(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.stage_file(cid, 0, body(b"hi"), sha(b"hi"))
+    f = [{"index": 0, "display_name": "a.txt", "sha256": sha(b"hi"), "error": None}]
+    path = await s.commit(cid, rec(cid, f))
+    assert (tmp_path / path / "files" / "00-a.txt").read_bytes() == b"hi"
+
+
+async def test_reindex_skips_junk_folders(tmp_path, capsys):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.commit(cid, rec(cid, []))
+    base = tmp_path / "captures" / "2026" / "10"
+    bad_json = base / str(uuid4())
+    bad_json.mkdir()
+    (bad_json / "record.json").write_text("{nope")
+    no_keys = base / str(uuid4())
+    no_keys.mkdir()
+    (no_keys / "record.json").write_text(json.dumps({"id": "x"}))
+    not_uuid = base / "Not-A-Uuid"
+    not_uuid.mkdir()
+    (not_uuid / "record.json").write_text("{}")
+    assert s.reindex() == 1
+    lines = (tmp_path / "index.jsonl").read_text().splitlines()
+    assert [json.loads(line)["id"] for line in lines] == [cid]
+    assert len(capsys.readouterr().err.strip().splitlines()) == 3

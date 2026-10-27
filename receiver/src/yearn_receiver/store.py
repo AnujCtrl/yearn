@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 from collections import defaultdict
 from collections.abc import AsyncIterator
@@ -46,9 +47,17 @@ class NotStored(Exception):
     pass
 
 
+_EXT = re.compile(r"[A-Za-z0-9_-]{1,10}")
+
+
 def safe_name(display_name: str) -> str:
-    name = _UNSAFE.sub("_", display_name)[:80].lstrip("._")
-    return name or "file"
+    stem, dot, ext = display_name.rpartition(".")
+    if not dot or not _EXT.fullmatch(ext):
+        stem, suffix = display_name, ""
+    else:
+        suffix = "." + ext
+    stem = _UNSAFE.sub("_", stem).lstrip("._") or "file"
+    return stem[: 80 - len(suffix)] + suffix
 
 
 def _fsync_dir(path: Path) -> None:
@@ -124,7 +133,7 @@ def _validate(capture_id: str, record: dict) -> tuple[datetime, list[dict]]:
         if isinstance(err, str) and err:
             continue
         sha = f.get("sha256")
-        if "error" in f or not isinstance(sha, str) or not _HEX64.fullmatch(sha):
+        if err is not None or not isinstance(sha, str) or not _HEX64.fullmatch(sha):
             raise RecordRejected("bad_record")
         needed.append(f)
     return when, needed
@@ -300,15 +309,24 @@ class CaptureStore:
     def reindex(self) -> int:
         entries = []
         for rec_path in sorted((self.root / "captures").glob("*/*/*/record.json")):
-            record = json.loads(rec_path.read_text())
-            entries.append(
-                {
+            rel = rec_path.parent.relative_to(self.root).as_posix()
+            try:
+                _check_id(rec_path.parent.name)
+                if rec_path.parent.name != rec_path.parent.name.lower():
+                    raise ValueError("folder name is not a lowercase uuid")
+                record = json.loads(rec_path.read_text())
+                entry = {
                     "id": record["id"],
                     "captured_at": record["captured_at"],
                     "received_at": record["received_at"],
-                    "path": rec_path.parent.relative_to(self.root).as_posix(),
+                    "path": rel,
                 }
-            )
+                if not all(isinstance(entry[k], str) for k in ("id", "captured_at", "received_at")):
+                    raise ValueError("id, captured_at and received_at must be strings")
+            except (ValueError, KeyError, TypeError, OSError) as e:
+                print(f"yearn-receiver: reindex: skipping {rel}: {e}", file=sys.stderr)
+                continue
+            entries.append(entry)
         entries.sort(key=lambda e: (e["received_at"], e["id"]))
         data = "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries).encode()
         self.root.mkdir(parents=True, exist_ok=True)
