@@ -60,7 +60,7 @@ class YearnApp : Application() {
         val g = graph
         appScope.launch {
             try {
-                g.dao.markInterruptedCopies()
+                if (g.dao.markInterruptedCopies() > 0) g.scheduler.enqueueNow()
             } finally {
                 // Never block shares forever, even if recovery itself failed.
                 recovery.complete(Unit)

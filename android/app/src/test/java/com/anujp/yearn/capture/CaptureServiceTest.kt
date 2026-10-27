@@ -210,4 +210,23 @@ class CaptureServiceTest {
         assertNotNull(dao.get("cap-2"))
         assertEquals(1, calls)
     }
+
+    @Test
+    fun concurrentCopyFiles_copiesOnceAndEnqueuesOnce() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val copier = FakeCopier { _, _ -> entered.complete(Unit); gate.await() }
+        val svc = service(copier)
+        svc.begin(streamIntent(2), hints)
+        val a = launch { svc.copyFiles("cap-1") {} }
+        entered.await()
+        val b = launch { svc.copyFiles("cap-1") {} }
+        kotlinx.coroutines.yield()
+        gate.complete(Unit)
+        a.join()
+        b.join()
+        assertEquals(listOf(0, 1), copier.calls)
+        assertEquals(1, scheduler.now)
+        assertTrue(dao.get("cap-1")!!.filesComplete)
+    }
 }

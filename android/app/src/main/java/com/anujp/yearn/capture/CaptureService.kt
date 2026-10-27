@@ -12,6 +12,8 @@ import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.data.Timestamps
 import com.anujp.yearn.sync.SyncScheduler
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonNull
@@ -20,6 +22,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.time.ZonedDateTime
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 data class CaptureProgress(
     val captureId: String,
@@ -63,6 +66,7 @@ class CaptureService(
     private val beforeFirstCapture: suspend () -> Unit = {},
     private val thumbnailer: (File, String?, File) -> File? = Thumbnails::make,
 ) {
+    private val copyLocks = ConcurrentHashMap<String, Mutex>()
     private val gate = Mutex()
     private var gateDone = false
 
@@ -111,7 +115,16 @@ class CaptureService(
         }
     }
 
+    /**
+     * Serialized per capture: an overlapping call waits, then sees the capture complete and returns,
+     * so files are copied once and the scheduler is enqueued once. Runs on IO, safe from Main.
+     */
     suspend fun copyFiles(captureId: String, onProgress: (CaptureProgress) -> Unit) {
+        val lock = copyLocks.computeIfAbsent(captureId) { Mutex() }
+        lock.withLock { withContext(Dispatchers.IO) { copyFilesLocked(captureId, onProgress) } }
+    }
+
+    private suspend fun copyFilesLocked(captureId: String, onProgress: (CaptureProgress) -> Unit) {
         val capture = dao.get(captureId) ?: return
         if (capture.filesComplete) return
         val preview = SharePreview(capture.previewTitle, capture.previewText, capture.previewUrl, capture.sourceLabel)
