@@ -1,0 +1,246 @@
+import asyncio
+import json
+import os
+from uuid import uuid4
+
+import pytest
+
+from yearn_receiver.store import (
+    CaptureStatus,
+    CaptureStore,
+    HashMismatch,
+    NotStored,
+    RecordRejected,
+    safe_name,
+)
+from helpers import body, rec, sha
+
+pytestmark = pytest.mark.anyio
+
+
+def one_file(data=b"hello", name="a.txt"):
+    return [{"index": 0, "display_name": name, "sha256": sha(data)}]
+
+
+async def test_stage_then_commit_stores_record_and_files(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    data = b"x" * 100_000
+    await s.stage_file(cid, 0, body(data), sha(data))
+    assert s.status(cid) == CaptureStatus(stored=False, staged={0: sha(data)})
+    path = await s.commit(cid, rec(cid, [{"index": 0, "display_name": "clip.mp4", "sha256": sha(data)}]))
+    folder = tmp_path / path
+    assert path.startswith("captures/2026/10/")
+    assert (folder / "files" / "00-clip.mp4").read_bytes() == data
+    assert sorted(p.name for p in (folder / "files").iterdir()) == ["00-clip.mp4"]
+    stored = json.loads((folder / "record.json").read_text())
+    assert stored["id"] == cid and "received_at" in stored
+    assert stored["received_at"][-6] in "+-"  # local time with offset
+    assert s.status(cid) == CaptureStatus(stored=True, staged={})
+    assert not (tmp_path / ".staging" / cid).exists()
+    lines = (tmp_path / "index.jsonl").read_text().splitlines()
+    assert json.loads(lines[0])["id"] == cid
+    assert json.loads(lines[0])["path"] == path
+
+
+async def test_stage_hash_mismatch_deletes_part(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    with pytest.raises(HashMismatch) as e:
+        await s.stage_file(cid, 0, body(b"abc"), "0" * 64)
+    assert e.value.error == "hash_mismatch" and e.value.index == 0
+    assert s.status(cid).staged == {}
+    assert list((tmp_path / ".staging" / cid / "files").iterdir()) == []
+
+
+async def test_stage_for_stored_capture_writes_nothing(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.commit(cid, rec(cid, [{"index": 0, "display_name": "a", "error": "gone"}]))
+    assert await s.stage_file(cid, 3, body(b"abc"), sha(b"abc")) == sha(b"abc")
+    assert not (tmp_path / ".staging" / cid).exists()
+
+
+async def test_commit_rejects_missing_file(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    with pytest.raises(RecordRejected) as e:
+        await s.commit(cid, rec(cid, [{"index": 0, "display_name": "a", "sha256": "a" * 64}]))
+    assert e.value.error == "missing_file" and e.value.index == 0
+    assert not s.status(cid).stored
+
+
+async def test_commit_rejects_hash_mismatch_of_staged_file(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.stage_file(cid, 0, body(b"abc"), sha(b"abc"))
+    with pytest.raises(HashMismatch) as e:
+        await s.commit(cid, rec(cid, one_file(b"different")))
+    assert e.value.index == 0
+    assert not s.status(cid).stored
+
+
+async def test_commit_rehashes_even_if_file_changed_after_staging(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.stage_file(cid, 0, body(b"abc"), sha(b"abc"))
+    (tmp_path / ".staging" / cid / "files" / "0").write_bytes(b"corrupt")
+    with pytest.raises(HashMismatch):
+        await s.commit(cid, rec(cid, one_file(b"abc")))
+
+
+async def test_commit_accepts_file_with_error_and_no_upload(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    path = await s.commit(cid, rec(cid, [{"index": 0, "display_name": "a", "error": "permission denied"}]))
+    assert s.status(cid).stored
+    assert not (tmp_path / path / "files").exists() or list((tmp_path / path / "files").iterdir()) == []
+
+
+async def test_commit_rejects_id_mismatch(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    with pytest.raises(RecordRejected) as e:
+        await s.commit(cid, rec(str(uuid4()), []))
+    assert e.value.error == "id_mismatch"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda r: r.update(schema_version=2),
+        lambda r: r.pop("schema_version"),
+        lambda r: r.update(captured_at="nonsense"),
+        lambda r: r.update(captured_at="2026-10-26T12:41:07"),  # no offset
+        lambda r: r.update(captured_at=5),
+        lambda r: r.update(files="x"),
+        lambda r: r.update(files=[{"index": "0", "display_name": "a", "error": "e"}]),
+        lambda r: r.update(files=[{"index": True, "display_name": "a", "error": "e"}]),
+        lambda r: r.update(files=[{"index": 0, "display_name": 5, "error": "e"}]),
+        lambda r: r.update(files=[{"index": 0, "display_name": "a"}]),
+        lambda r: r.update(files=[{"index": 0, "display_name": "a", "error": ""}]),
+        lambda r: r.update(files=[{"index": 0, "display_name": "a", "sha256": "zz"}]),
+        lambda r: r.update(files=[{"index": 0, "display_name": "a", "error": "e"}] * 2),
+        lambda r: r.update(files=["nope"]),
+    ],
+)
+async def test_commit_rejects_bad_records(tmp_path, mutate):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    r = rec(cid, [{"index": 0, "display_name": "a", "error": "e"}])
+    mutate(r)
+    with pytest.raises(RecordRejected) as e:
+        await s.commit(cid, r)
+    assert e.value.error == "bad_record"
+    assert not s.status(cid).stored
+
+
+async def test_commit_accepts_z_offset_and_empty_display_name(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    r = rec(cid, [{"index": 0, "display_name": "", "error": "e"}])
+    r["captured_at"] = "2026-03-05T01:02:03Z"
+    assert (await s.commit(cid, r)).startswith("captures/2026/03/")
+
+
+async def test_unknown_keys_stored_untouched(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    r = rec(cid, [])
+    r["extras"] = {"k": [1, "é"]}
+    path = await s.commit(cid, r)
+    stored = json.loads((tmp_path / path / "record.json").read_text())
+    received = stored.pop("received_at")
+    assert stored == r and received
+
+
+async def test_repeat_commit_is_noop(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    r = rec(cid, [])
+    p1 = await s.commit(cid, r)
+    mtime = os.stat(tmp_path / p1 / "record.json").st_mtime_ns
+    p2 = await s.commit(cid, r)
+    assert p1 == p2
+    assert len((tmp_path / "index.jsonl").read_text().splitlines()) == 1
+    assert os.stat(tmp_path / p1 / "record.json").st_mtime_ns == mtime
+
+
+async def test_concurrent_commits_store_once(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    data = b"y" * 50_000
+    await s.stage_file(cid, 0, body(data), sha(data))
+    r = rec(cid, one_file(data, "f.bin"))
+    p1, p2 = await asyncio.gather(s.commit(cid, r), s.commit(cid, r))
+    assert p1 == p2
+    assert len((tmp_path / "index.jsonl").read_text().splitlines()) == 1
+
+
+async def test_leftover_staging_does_not_count_as_stored(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    files = tmp_path / ".staging" / cid / "files"
+    files.mkdir(parents=True)
+    (files / "0").write_bytes(b"half written")
+    assert s.status(cid) == CaptureStatus(stored=False, staged={})  # no sidecar: not reported
+    data = b"fresh"
+    await s.stage_file(cid, 0, body(data), sha(data))
+    path = await s.commit(cid, rec(cid, one_file(data)))
+    assert (tmp_path / path / "files" / "00-a.txt").read_bytes() == data
+
+
+async def test_unused_staged_files_and_sidecars_not_committed(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.stage_file(cid, 0, body(b"one"), sha(b"one"))
+    await s.stage_file(cid, 1, body(b"extra"), sha(b"extra"))
+    path = await s.commit(cid, rec(cid, one_file(b"one")))
+    assert [p.name for p in (tmp_path / path / "files").iterdir()] == ["00-a.txt"]
+
+
+def test_display_name_cannot_escape():
+    assert safe_name("../../etc/passwd") == "etc_passwd"
+    assert "/" not in safe_name("a/b\x00c") and len(safe_name("x" * 300)) == 80 and safe_name("") == "file"
+    assert not safe_name("...").startswith(".")
+    assert safe_name("..") == "file"
+
+
+async def test_hostile_display_name_stays_in_folder(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    await s.stage_file(cid, 0, body(b"z"), sha(b"z"))
+    path = await s.commit(cid, rec(cid, one_file(b"z", "../../../evil\x00/..")))
+    names = [p.name for p in (tmp_path / path / "files").iterdir()]
+    assert len(names) == 1 and names[0].startswith("00-") and "/" not in names[0]
+    assert not (tmp_path / "evil").exists()
+
+
+async def test_append_note_requires_stored(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    with pytest.raises(NotStored):
+        s.append_note(cid, "hi", "2026-10-26T13:00:00+05:30")
+    path = await s.commit(cid, rec(cid, []))
+    s.append_note(cid, "hi", "2026-10-26T13:00:00+05:30")
+    lines = (tmp_path / path / "notes.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["note"] == "hi" and entry["note_updated_at"] == "2026-10-26T13:00:00+05:30"
+    assert "received_at" in entry
+
+
+async def test_reindex_rebuilds_from_folders(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    path = await s.commit(cid, rec(cid, []))
+    original = (tmp_path / "index.jsonl").read_text()
+    (tmp_path / "index.jsonl").unlink()
+    assert s.reindex() == 1
+    assert (tmp_path / "index.jsonl").read_text() == original
+    assert json.loads(original)["path"] == path
+
+
+def test_reindex_on_empty_root(tmp_path):
+    assert CaptureStore(tmp_path).reindex() == 0
+    assert (tmp_path / "index.jsonl").read_text() == ""
