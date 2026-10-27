@@ -324,3 +324,81 @@ async def test_reindex_skips_junk_folders(tmp_path, capsys):
     lines = (tmp_path / "index.jsonl").read_text().splitlines()
     assert [json.loads(line)["id"] for line in lines] == [cid]
     assert len(capsys.readouterr().err.strip().splitlines()) == 3
+
+
+async def test_identical_note_put_is_idempotent(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    path = await s.commit(cid, rec(cid, []))
+    s.append_note(cid, "hi", "2026-10-26T13:00:00+05:30")
+    s.append_note(cid, "hi", "2026-10-26T13:00:00+05:30")
+    s.append_note(cid, "hi", "2026-10-26T14:00:00+05:30")
+    lines = (tmp_path / path / "notes.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+
+
+async def test_note_after_torn_last_line_gets_fresh_line(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    path = await s.commit(cid, rec(cid, []))
+    notes = tmp_path / path / "notes.jsonl"
+    notes.write_bytes(b'{"note": "tor')
+    s.append_note(cid, "hi", "2026-10-26T13:00:00+05:30")
+    lines = notes.read_text().splitlines()
+    assert len(lines) == 2 and json.loads(lines[1])["note"] == "hi"
+
+
+async def test_lone_surrogate_in_record_and_note_is_stored(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    r = rec(cid, [])
+    r["extras"] = {"title": "bad \ud800 text"}
+    path = await s.commit(cid, r)
+    assert json.loads((tmp_path / path / "record.json").read_text())["extras"]["title"] == "bad \ud800 text"
+    s.append_note(cid, "n \ud800", "2026-10-26T13:00:00+05:30")
+    line = (tmp_path / path / "notes.jsonl").read_text().splitlines()[0]
+    assert json.loads(line)["note"] == "n \ud800"
+    assert len((tmp_path / "index.jsonl").read_text().splitlines()) == 1
+
+
+async def test_concurrent_puts_of_same_index_use_distinct_parts(tmp_path):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    seen = []
+
+    async def slow(data):
+        yield data[:1]
+        seen.append(sorted(p.name for p in (tmp_path / ".staging" / cid / "files").glob("*.part")))
+        await asyncio.sleep(0.05)
+        yield data[1:]
+
+    a, b = b"first", b"other"
+    await asyncio.gather(
+        s.stage_file(cid, 0, slow(a), sha(a)),
+        s.stage_file(cid, 0, slow(b), sha(b)),
+    )
+    assert any(len(names) == 2 for names in seen)
+    assert list((tmp_path / ".staging" / cid / "files").glob("*.part")) == []
+
+
+async def test_commit_retry_after_failed_final_rename(tmp_path, monkeypatch):
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    data = b"payload"
+    await s.stage_file(cid, 0, body(data), sha(data))
+    r = rec(cid, [{"index": 0, "display_name": "a.bin", "sha256": sha(data)}])
+    staging = tmp_path / ".staging" / cid
+    real = os.rename
+
+    def flaky(src, dst, *a, **kw):
+        if str(src) == str(staging):
+            raise OSError("boom")
+        return real(src, dst, *a, **kw)
+
+    monkeypatch.setattr(os, "rename", flaky)
+    with pytest.raises(OSError):
+        await s.commit(cid, r)
+    monkeypatch.undo()
+    path = await s.commit(cid, r)
+    assert (tmp_path / path / "files" / "00-a.bin").read_bytes() == data
+    assert s.status(cid).stored

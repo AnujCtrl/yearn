@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 _HEX64 = re.compile(r"[0-9a-fA-F]{64}")
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -58,6 +58,14 @@ def safe_name(display_name: str) -> str:
         suffix = "." + ext
     stem = _UNSAFE.sub("_", stem).lstrip("._") or "file"
     return stem[: 80 - len(suffix)] + suffix
+
+
+def _dumps(obj: object, **kw) -> bytes:
+    """JSON as UTF-8 bytes; a lone surrogate falls back to \\u escapes instead of raising."""
+    try:
+        return json.dumps(obj, ensure_ascii=False, **kw).encode()
+    except UnicodeEncodeError:
+        return json.dumps(obj, ensure_ascii=True, **kw).encode()
 
 
 def _fsync_dir(path: Path) -> None:
@@ -184,7 +192,8 @@ class CaptureStore:
             return expected_sha256
         files = self._staging(capture_id) / "files"
         await asyncio.to_thread(files.mkdir, parents=True, exist_ok=True)
-        part, final, side = files / f"{index}.part", files / str(index), files / f"{index}.sha256"
+        part = files / f"{index}.{uuid4().hex}.part"
+        final, side = files / str(index), files / f"{index}.sha256"
         h = hashlib.sha256()
         try:
             with open(part, "wb") as f:
@@ -239,7 +248,10 @@ class CaptureStore:
         for f in needed:
             src = files / str(f["index"])
             if not src.is_file():
-                raise RecordRejected("missing_file", f["index"])
+                # a failed earlier commit may already have renamed it
+                src = files / f"{f['index']:02d}-{safe_name(f['display_name'])}"
+                if not src.is_file():
+                    raise RecordRejected("missing_file", f["index"])
             if _sha256_file(src) != f["sha256"].lower():
                 src.unlink(missing_ok=True)
                 (files / f"{f['index']}.sha256").unlink(missing_ok=True)
@@ -247,12 +259,13 @@ class CaptureStore:
 
         stored = dict(record)
         stored["received_at"] = _now()
-        _write_durable(staging / "record.json", json.dumps(stored, ensure_ascii=False, indent=2).encode())
+        _write_durable(staging / "record.json", _dumps(stored, indent=2))
 
         keep: set[str] = set()
         for f in needed:
             name = f"{f['index']:02d}-{safe_name(f['display_name'])}"
-            os.rename(files / str(f["index"]), files / name)
+            if (files / str(f["index"])).is_file():
+                os.rename(files / str(f["index"]), files / name)
             keep.add(name)
         for leftover in files.iterdir():  # sidecars, unused or stale uploads
             if leftover.name not in keep:
@@ -282,7 +295,7 @@ class CaptureStore:
         with self._index_lock:
             created = not index.exists()
             with open(index, "ab") as f:
-                f.write((json.dumps(entry, ensure_ascii=False) + "\n").encode())
+                f.write(_dumps(entry) + b"\n")
                 f.flush()
                 os.fsync(f.fileno())
             if created:
@@ -294,13 +307,22 @@ class CaptureStore:
         folder = self._find_committed(capture_id)
         if folder is None:
             raise NotStored(capture_id)
-        line = json.dumps(
-            {"note": note, "note_updated_at": note_updated_at, "received_at": _now()}, ensure_ascii=False
-        )
+        line = _dumps({"note": note, "note_updated_at": note_updated_at, "received_at": _now()})
         notes = folder / "notes.jsonl"
         created = not notes.exists()
+        torn = False
+        if not created:
+            existing = notes.read_bytes()
+            torn = bool(existing) and not existing.endswith(b"\n")
+            for raw in existing.splitlines():
+                try:
+                    prev = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(prev, dict) and prev.get("note") == note and prev.get("note_updated_at") == note_updated_at:
+                    return  # a repeat of a stored note changes nothing
         with open(notes, "ab") as f:
-            f.write((line + "\n").encode())
+            f.write((b"\n" if torn else b"") + line + b"\n")
             f.flush()
             os.fsync(f.fileno())
         if created:
@@ -328,7 +350,7 @@ class CaptureStore:
                 continue
             entries.append(entry)
         entries.sort(key=lambda e: (e["received_at"], e["id"]))
-        data = "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries).encode()
+        data = b"".join(_dumps(e) + b"\n" for e in entries)
         self.root.mkdir(parents=True, exist_ok=True)
         with self._index_lock:
             tmp = self.root / "index.jsonl.tmp"
