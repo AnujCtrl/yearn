@@ -244,3 +244,41 @@ async def test_reindex_rebuilds_from_folders(tmp_path):
 def test_reindex_on_empty_root(tmp_path):
     assert CaptureStore(tmp_path).reindex() == 0
     assert (tmp_path / "index.jsonl").read_text() == ""
+
+
+async def test_cancelled_commit_does_not_let_retry_overlap(tmp_path, monkeypatch):
+    import threading
+
+    from yearn_receiver import store as store_mod
+
+    s = CaptureStore(tmp_path)
+    cid = str(uuid4())
+    started, release = threading.Event(), threading.Event()
+    real = store_mod._write_durable
+
+    entered = []
+
+    def slow(path, data):
+        if path.name == "record.json":
+            entered.append(1)
+            started.set()
+            release.wait(5)
+        real(path, data)
+
+    monkeypatch.setattr(store_mod, "_write_durable", slow)
+    r = rec(cid, [])
+    first = asyncio.create_task(s.commit(cid, r))
+    while not started.is_set():
+        await asyncio.sleep(0.01)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    second = asyncio.create_task(s.commit(cid, r))
+    await asyncio.sleep(0.1)  # second must be waiting, not running alongside
+    assert len(entered) == 1  # no second worker inside the commit while the first runs
+    release.set()
+    path = await second
+    assert path.startswith("captures/2026/10/")
+    assert len(list((tmp_path / "captures").glob("*/*/*"))) == 1
+    assert json.loads((tmp_path / path / "record.json").read_text())["id"] == cid
+    assert len((tmp_path / "index.jsonl").read_text().splitlines()) == 1

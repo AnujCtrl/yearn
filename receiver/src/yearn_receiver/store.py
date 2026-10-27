@@ -135,6 +135,8 @@ class CaptureStore:
         self.root = Path(root)
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._index_lock = threading.Lock()
+        # Held by the commit worker thread itself, so it outlives a cancelled awaiter.
+        self._thread_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
     # -- paths -------------------------------------------------------------
 
@@ -208,9 +210,17 @@ class CaptureStore:
             existing = self._find_committed(capture_id)
             if existing is not None:
                 return existing.relative_to(self.root).as_posix()
-            return await asyncio.to_thread(self._commit_locked, capture_id, record)
+            thread_lock = self._thread_locks[capture_id]
+            return await asyncio.to_thread(self._commit_locked, capture_id, record, thread_lock)
 
-    def _commit_locked(self, capture_id: str, record: dict) -> str:
+    def _commit_locked(self, capture_id: str, record: dict, thread_lock: threading.Lock) -> str:
+        with thread_lock:
+            existing = self._find_committed(capture_id)
+            if existing is not None:
+                return existing.relative_to(self.root).as_posix()
+            return self._commit_unlocked(capture_id, record)
+
+    def _commit_unlocked(self, capture_id: str, record: dict) -> str:
         when, needed = _validate(capture_id, record)
         staging = self._staging(capture_id)
         files = staging / "files"
