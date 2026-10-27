@@ -41,6 +41,7 @@ private class FakeCaptureDao : CaptureDao() {
     override fun observe(id: String): Flow<CaptureEntity?> = all.map { l -> l.find { it.id == id } }
     override suspend fun get(id: String): CaptureEntity? = all.value.find { it.id == id }
     override suspend fun files(id: String): List<FileEntity> = emptyList()
+    override fun observeFiles(id: String): Flow<List<FileEntity>> = MutableStateFlow(emptyList())
     override suspend fun updateFile(f: FileEntity) = Unit
     override suspend fun setFilesComplete(id: String, thumbPath: String?) = Unit
     override suspend fun setSync(id: String, status: SyncStatus, attempts: Int, lastError: String?, uploadedAt: String?) {
@@ -186,5 +187,25 @@ class HomeViewModelTest {
         advanceTimeBy(60_000)
         runCurrent()
         assertEquals("Chrome · 1 min", vm.rows.value.single().subtitle)
+    }
+
+    @Test
+    fun header_combinesLastSyncAndWaiting() = runTest {
+        val lastSync = MutableStateFlow<String?>(null)
+        dao.all.value = listOf(capture("w1"), capture("w2"), capture("done", SyncStatus.UPLOADED))
+        val vm = HomeViewModel(dao, scheduler, lastSync) { now }
+        backgroundScope.launch { vm.header.collect {} }
+        runCurrent()
+        assertEquals("2 waiting", vm.header.value) // never synced: no "Synced" part
+
+        lastSync.value = "2026-10-27T14:46:00+05:30"
+        runCurrent()
+        assertEquals("Synced 14 min ago · 2 waiting", vm.header.value)
+
+        dao.setSync("w1", SyncStatus.UPLOADED, 0, null, null)
+        dao.setSync("w2", SyncStatus.UPLOADED, 0, null, null)
+        lastSync.value = "2026-10-27T14:59:40+05:30"
+        runCurrent()
+        assertEquals("Synced just now", vm.header.value)
     }
 }

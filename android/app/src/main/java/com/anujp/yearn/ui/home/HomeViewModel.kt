@@ -7,15 +7,18 @@ import com.anujp.yearn.data.CaptureEntity
 import com.anujp.yearn.data.SyncStatus
 import com.anujp.yearn.sync.SyncScheduler
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
+import java.time.OffsetDateTime
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -40,6 +43,8 @@ data class SaveRow(
 class HomeViewModel(
     private val dao: CaptureDao,
     private val scheduler: SyncScheduler,
+    /** `SettingsStore.lastSuccessfulSync`: an ISO-8601 timestamp, or null if never synced. */
+    private val lastSync: Flow<String?> = flowOf(null),
     private val clock: () -> ZonedDateTime,
 ) : ViewModel() {
     /** Emits the clock's time now and once a minute, so "5 min" keeps counting while the list is open. */
@@ -58,6 +63,13 @@ class HomeViewModel(
     val waitingCount: StateFlow<Int> = dao.observeAll()
         .map { list -> list.count { it.syncStatus == SyncStatus.WAITING || it.syncStatus == SyncStatus.UPLOADING } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), 0)
+
+    /** The line under the title: `Synced 14 min ago · 2 waiting`; either half drops out when it has nothing to say. */
+    val header: StateFlow<String> = combine(lastSync, waitingCount, ticker) { last, waiting, now ->
+        val synced = last?.let { runCatching { OffsetDateTime.parse(it).atZoneSameInstant(now.zone) }.getOrNull() }
+            ?.let { "Synced " + ago(it, now) }
+        listOfNotNull(synced, if (waiting > 0) "$waiting waiting" else null).joinToString(" · ")
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), "")
 
     fun syncNow() = scheduler.enqueueNow()
 
@@ -116,4 +128,11 @@ fun relativeTime(then: ZonedDateTime, now: ZonedDateTime): String {
             if (local.toLocalDate() == now.toLocalDate().minusDays(1)) "Yesterday" else MonthDay.format(local)
         }
     }
+}
+
+/** [relativeTime] as a phrase: `just now`, `5 min ago`, `3 h ago`, `yesterday`, `on Oct 24`. */
+fun ago(then: ZonedDateTime, now: ZonedDateTime): String = when (val r = relativeTime(then, now)) {
+    "now" -> "just now"
+    "Yesterday" -> "yesterday"
+    else -> if (r.endsWith(" min") || r.endsWith(" h")) "$r ago" else "on $r"
 }

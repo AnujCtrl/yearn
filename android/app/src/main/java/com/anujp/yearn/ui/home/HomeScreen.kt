@@ -103,7 +103,7 @@ private val SidebarThumb = 42.dp
 private val SidebarThumbRadius = 11.dp
 private val DetailGap = 16.dp
 
-private val safeInsets: WindowInsets
+internal val safeInsets: WindowInsets
     @Composable get() = WindowInsets.systemBars.union(WindowInsets.displayCutout)
 
 /** The phone (and folded) layout: large title, inset groups, glass buttons and capsule floating over the list. */
@@ -111,6 +111,7 @@ private val safeInsets: WindowInsets
 fun SavesList(
     rows: List<SaveRow>,
     waitingCount: Int,
+    header: String,
     onSync: () -> Unit,
     onRetry: (String) -> Unit,
     onOpenSettings: () -> Unit,
@@ -137,7 +138,12 @@ fun SavesList(
             ),
         ) {
             item(key = "title", contentType = "title") {
-                LargeTitle("Saves", Modifier.padding(start = 4.dp, bottom = 8.dp))
+                Column(Modifier.padding(start = 4.dp, bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    LargeTitle("Saves")
+                    if (header.isNotEmpty()) {
+                        BasicText(header, style = YearnType.Subhead.copy(color = colors.secondaryLabel), maxLines = 1)
+                    }
+                }
             }
             if (rows.isEmpty()) {
                 item(key = "empty", contentType = "empty") { EmptyState(Modifier.padding(start = 4.dp, top = 24.dp)) }
@@ -314,7 +320,7 @@ private object ThumbCache {
 }
 
 /** Decodes [path] off the main thread, subsampled to about twice [targetPx]; null if missing or unreadable. */
-private suspend fun decodeThumb(path: String, targetPx: Int): ImageBitmap? = withContext(Dispatchers.IO) {
+internal suspend fun decodeThumb(path: String, targetPx: Int): ImageBitmap? = withContext(Dispatchers.IO) {
     val key = "$path@$targetPx"
     ThumbCache.bitmaps.get(key)?.let { return@withContext it }
     runCatching {
@@ -345,7 +351,7 @@ private fun SaveThumb(path: String?, source: String, size: Dp, radius: Dp) {
 }
 
 // Tile bases taken from the boards' thumbnails, plus a few iOS system colours.
-private val TilePalette = listOf(
+internal val TilePalette = listOf(
     0xFFFF5A1F, 0xFF0A66C2, 0xFF7A3CFF, 0xFF2A60D8, 0xFF2F7A5A, 0xFFFF2D55,
     0xFF5E5CE6, 0xFFFF9500, 0xFF34C759, 0xFF00A3A3, 0xFF6E7681, 0xFFAF52DE,
 ).map { Color(it) }
@@ -391,23 +397,18 @@ fun SavesTwoPane(
     onRetry: (String) -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    detail: @Composable (id: String, paneStart: Dp) -> Unit = { _, _ -> },
 ) {
     val colors = LocalYearnColors.current
     val haze = rememberHazeState()
     val insets = safeInsets.asPaddingValues()
     val start = insets.calculateStartPadding(LocalLayoutDirection.current)
-    val selected = rows.firstOrNull { it.id == selectedId }
 
     Box(modifier.fillMaxSize().background(colors.background)) {
-        DetailPlaceholder(
-            selected,
-            Modifier
-                .fillMaxSize()
-                .hazeSource(haze)
-                .background(colors.background)
-                .windowInsetsPadding(safeInsets)
-                .padding(start = SidebarInset + SidebarWidth + DetailGap, end = 24.dp, bottom = 24.dp),
-        )
+        // The pane spans the whole width (its media runs under the sidebar, which blurs it).
+        Box(Modifier.fillMaxSize().hazeSource(haze).background(colors.background)) {
+            if (selectedId != null) detail(selectedId, start + SidebarInset + SidebarWidth + DetailGap)
+        }
         Sidebar(
             rows, selectedId, onSelect, onSync, onRetry, onOpenSettings, haze,
             Modifier
@@ -498,19 +499,6 @@ private fun SidebarRow(row: SaveRow, selected: Boolean, onClick: () -> Unit, onR
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-        }
-    }
-}
-
-/** Until the detail screen lands, the pane names the selected save. */
-@Composable
-private fun DetailPlaceholder(row: SaveRow?, modifier: Modifier) {
-    val colors = LocalYearnColors.current
-    Column(modifier, verticalArrangement = Arrangement.Bottom) {
-        if (row != null) {
-            BasicText(row.subtitle, style = YearnType.Caption.copy(color = colors.secondaryLabel))
-            Spacer(Modifier.height(2.dp))
-            BasicText(row.title, style = YearnType.DetailTitle.copy(color = colors.label), maxLines = 4, overflow = TextOverflow.Ellipsis)
         }
     }
 }

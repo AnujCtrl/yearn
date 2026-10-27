@@ -33,6 +33,9 @@ abstract class CaptureDao {
     @Query("SELECT * FROM files WHERE captureId = :id ORDER BY `index`")
     abstract suspend fun files(id: String): List<FileEntity>
 
+    @Query("SELECT * FROM files WHERE captureId = :id ORDER BY `index`")
+    abstract fun observeFiles(id: String): Flow<List<FileEntity>>
+
     @Update
     abstract suspend fun updateFile(f: FileEntity)
 

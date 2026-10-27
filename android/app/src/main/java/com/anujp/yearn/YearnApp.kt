@@ -36,6 +36,8 @@ class AppGraph(
     val service: CaptureService,
     val uploader: CaptureUploader,
     val settings: SettingsStore,
+    /** The one way to get a receiver client: from the saved address and token; null means not set up. */
+    val clientFactory: suspend () -> ReceiverClient? = receiverClientFactory(settings),
 ) {
     companion object {
         fun build(
@@ -52,18 +54,17 @@ class AppGraph(
             val service = CaptureService(
                 dao, copier, scheduler, thumbs, deviceJson(app), beforeFirstCapture = recovery,
             )
-            val uploader = CaptureUploader(
-                dao,
-                client = {
-                    val url = settings.baseUrl.first()?.toHttpUrlOrNull()
-                    val token = settings.token()
-                    if (url == null || token == null) null else ReceiverClient.create(url, token)
-                },
-                clock = { ZonedDateTime.now() },
-            )
-            return AppGraph(db, dao, copier, thumbs, scheduler, service, uploader, settings)
+            val clientFactory = receiverClientFactory(settings)
+            val uploader = CaptureUploader(dao, client = clientFactory, clock = { ZonedDateTime.now() })
+            return AppGraph(db, dao, copier, thumbs, scheduler, service, uploader, settings, clientFactory)
         }
     }
+}
+
+fun receiverClientFactory(settings: SettingsStore): suspend () -> ReceiverClient? = {
+    val url = settings.baseUrl.first()?.toHttpUrlOrNull()
+    val token = settings.token()
+    if (url == null || token == null) null else ReceiverClient.create(url, token)
 }
 
 open class YearnApp : Application(), Configuration.Provider {
