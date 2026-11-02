@@ -26,8 +26,16 @@ class SettingsStore(context: Context, private val box: SecretBox) {
     val baseUrl: Flow<String?> = store.data.map { it[BASE_URL] }
     val lastSuccessfulSync: Flow<String?> = store.data.map { it[LAST_SYNC] }
 
+    /** Optional: the desktop's home Wi-Fi address, tried before [baseUrl] when the phone is on Wi-Fi. */
+    val homeUrl: Flow<String?> = store.data.map { it[HOME_URL] }
+
     suspend fun setBaseUrl(url: String) {
         store.edit { it[BASE_URL] = url }
+    }
+
+    /** Null removes it. */
+    suspend fun setHomeUrl(url: String?) {
+        store.edit { if (url == null) it.remove(HOME_URL) else it[HOME_URL] = url }
     }
 
     suspend fun setLastSuccessfulSync(timestamp: String) {
@@ -59,6 +67,7 @@ class SettingsStore(context: Context, private val box: SecretBox) {
 
     companion object {
         private val BASE_URL = stringPreferencesKey("base_url")
+        private val HOME_URL = stringPreferencesKey("home_url")
         private val TOKEN_SEALED = stringPreferencesKey("token_sealed")
         private val LAST_SYNC = stringPreferencesKey("last_successful_sync")
 

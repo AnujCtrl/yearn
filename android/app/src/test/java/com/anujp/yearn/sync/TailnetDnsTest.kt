@@ -33,6 +33,25 @@ class TailnetDnsTest {
     }
 
     @Test
+    fun homeGuard_acceptsOnlyPrivateLanAndLoopback() {
+        val home = TailnetDns.home()
+        for (a in listOf("192.168.1.194", "10.0.0.5", "172.16.0.1", "172.31.255.254", "127.0.0.1")) {
+            assertEquals(a, listOf(addr(a)), home.lookup(a))
+        }
+        for (a in listOf("8.8.8.8", "172.32.0.1", "172.15.255.255", "192.169.0.1", "100.101.102.103", "2001:4860:4860::8888")) {
+            assertThrows(a, UnknownHostException::class.java) { home.lookup(a) }
+        }
+    }
+
+    @Test
+    fun literalPublicIpUrl_isRefusedByTheHomeClientToo() = runBlocking {
+        val c = ReceiverClient.create("http://203.0.113.1:8787/".toHttpUrl(), "tok", ReceiverClient.httpClient(home = true))!!
+        val e = runCatching { c.proves() }.exceptionOrNull()
+        assertTrue("$e", e is ReceiverError.Unreachable)
+        assertTrue("${e?.cause}", e?.cause is UnknownHostException)
+    }
+
+    @Test
     fun namesAreResolvedThenFiltered() {
         val fake = Dns { name ->
             when (name) {

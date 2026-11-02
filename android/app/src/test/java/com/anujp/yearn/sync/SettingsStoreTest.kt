@@ -44,6 +44,16 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun homeUrl_isOptionalAndCanBeCleared() = runBlocking {
+        val store = SettingsStore(context, XorBox())
+        assertNull(store.homeUrl.first())
+        store.setHomeUrl("http://192.168.1.20:8787")
+        assertEquals("http://192.168.1.20:8787", store.homeUrl.first())
+        store.setHomeUrl(null)
+        assertNull(store.homeUrl.first())
+    }
+
+    @Test
     fun token_isNullWhenOpeningFails() = runBlocking {
         val store = SettingsStore(context, XorBox())
         store.setToken("abc")

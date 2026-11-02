@@ -8,6 +8,7 @@ import com.anujp.yearn.sync.ReceiverClient
 import com.anujp.yearn.sync.ReceiverError
 import com.anujp.yearn.sync.SettingsStore
 import com.anujp.yearn.sync.SyncScheduler
+import com.anujp.yearn.sync.TailnetDns
 import com.anujp.yearn.ui.home.ago
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -27,13 +28,15 @@ import java.util.Locale
 
 /**
  * The receiver address, the pairing token (typed in, only ever shown masked and never logged),
- * the connection check and the battery state. [clientFactory] is the app's own: null means
- * "not set up". [power] answers "is yearn exempt from battery optimisation?".
+ * the connection check and the battery state. [clientFactory] gives the Tailscale client and
+ * [homeClientFactory] the home Wi-Fi one, each on its own; null means "not set up". [power] answers
+ * "is yearn exempt from battery optimisation?".
  */
 class SettingsViewModel(
     private val store: SettingsStore,
     private val dao: CaptureDao,
     private val clientFactory: suspend () -> ReceiverClient?,
+    private val homeClientFactory: suspend () -> ReceiverClient? = { null },
     private val power: () -> Boolean,
     private val scheduler: SyncScheduler,
     private val clock: () -> ZonedDateTime = { ZonedDateTime.now() },
@@ -43,6 +46,9 @@ class SettingsViewModel(
 
     /** Null until the store has been read, then whether a desktop address is saved (there is no default). */
     val hasAddress: StateFlow<Boolean?> = store.baseUrl.map { it != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
+
+    val homeAddress: StateFlow<String?> = store.homeUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), null)
 
     val lastSuccessfulSync: StateFlow<String?> = store.lastSuccessfulSync
@@ -63,6 +69,11 @@ class SettingsViewModel(
     /** Empty until tested, then one of [REACHABLE], [UNREACHABLE], [UNAUTHORIZED], [NOT_SET_UP]. */
     val connection: StateFlow<String> = _connection.asStateFlow()
 
+    private val _homeConnection = MutableStateFlow("")
+
+    /** Empty without a home address, else [REACHABLE], [UNREACHABLE] or [NOT_YOUR_DESKTOP]. */
+    val homeConnection: StateFlow<String> = _homeConnection.asStateFlow()
+
     private val _checkedAt = MutableStateFlow<ZonedDateTime?>(null)
     val checkedAt: StateFlow<ZonedDateTime?> = _checkedAt.asStateFlow()
 
@@ -71,6 +82,9 @@ class SettingsViewModel(
 
     private val _addressError = MutableStateFlow<String?>(null)
     val addressError: StateFlow<String?> = _addressError.asStateFlow()
+
+    private val _homeAddressError = MutableStateFlow<String?>(null)
+    val homeAddressError: StateFlow<String?> = _homeAddressError.asStateFlow()
 
     private val _tokenError = MutableStateFlow<String?>(null)
     val tokenError: StateFlow<String?> = _tokenError.asStateFlow()
@@ -89,13 +103,17 @@ class SettingsViewModel(
         _battery.value = power()
     }
 
-    /** One `GET /v1/health` with the saved address and token. A second tap while it runs waits for the first. */
+    /**
+     * One `GET /v1/health` over Tailscale and, when a home address is saved, the token proof there. A second
+     * tap while it runs waits for the first.
+     */
     fun testConnection(): Job {
         test?.takeIf { it.isActive }?.let { return it }
         return viewModelScope.launch {
             _testing.value = true
             try {
                 _connection.value = check()
+                _homeConnection.value = checkHome()
                 _checkedAt.value = clock()
             } finally {
                 _testing.value = false
@@ -121,6 +139,46 @@ class SettingsViewModel(
         } catch (_: Exception) {
             UNREACHABLE
         }
+    }
+
+    /** Empty without a home address; the token is never sent there unless the desktop proves it has it. */
+    private suspend fun checkHome(): String {
+        val client = try {
+            homeClientFactory()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        } ?: return ""
+        return try {
+            if (client.proves()) REACHABLE else NOT_YOUR_DESKTOP
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            UNREACHABLE
+        }
+    }
+
+    /**
+     * The desktop's home Wi-Fi IP, like `192.168.1.20:8787`; blank removes it. An IP outside the home
+     * ranges is refused here, since the client would refuse to connect to it anyway.
+     */
+    fun setHomeAddress(raw: String): Job = viewModelScope.launch {
+        if (raw.isBlank()) {
+            _homeAddressError.value = null
+            store.setHomeUrl(null)
+            return@launch
+        }
+        val url = normalizeAddress(raw)
+        val literal = url?.toHttpUrlOrNull()?.host?.let(TailnetDns::literalOrNull)
+        if (url == null || (literal != null && !TailnetDns.isHomeNetwork(literal))) {
+            _homeAddressError.value = BAD_HOME_ADDRESS
+            return@launch
+        }
+        _homeAddressError.value = null
+        if (url == store.homeUrl.first()) return@launch
+        store.setHomeUrl(url)
+        scheduler.enqueueNow()
     }
 
     /** `desk:8787` and `http://desk:8787/` both save as `http://desk:8787`; waiting saves then go. */
@@ -174,7 +232,9 @@ class SettingsViewModel(
         const val UNREACHABLE = "Couldn't reach your desktop"
         const val UNAUTHORIZED = TOKEN_REJECTED_REASON
         const val NOT_SET_UP = "Desktop not set up yet"
+        const val NOT_YOUR_DESKTOP = "Something else answered at the home address"
         const val BAD_ADDRESS = "That isn't an address yearn can reach"
+        const val BAD_HOME_ADDRESS = "Use your desktop’s Wi-Fi IP, like 192.168.1.20:8787"
         const val BAD_TOKEN = "A pairing token has no spaces or accents"
         private const val STOP_TIMEOUT_MILLIS = 5_000L
     }
@@ -208,10 +268,29 @@ fun lastSyncLabel(timestamp: String?, now: ZonedDateTime): String {
     }
 }
 
-/** The Test connection row's subtitle: `Reachable a minute ago`, a failure in full, or a hint. */
-fun connectionLabel(connection: String, checkedAt: ZonedDateTime?, testing: Boolean, now: ZonedDateTime): String = when {
+/**
+ * The Test connection row's subtitle: `Reachable a minute ago`, a failure in full, or a hint. With a home
+ * address both routes are named: `Wi-Fi: reachable · Tailscale: can't reach`.
+ */
+fun connectionLabel(
+    connection: String,
+    checkedAt: ZonedDateTime?,
+    testing: Boolean,
+    now: ZonedDateTime,
+    home: String = "",
+): String = when {
     testing -> "Checking…"
     connection.isEmpty() -> "Ask your desktop if it can hear yearn"
+    home.isNotEmpty() -> "Wi-Fi: ${shortResult(home)} · Tailscale: ${shortResult(connection)}"
     connection == SettingsViewModel.REACHABLE && checkedAt != null -> "Reachable " + ago(checkedAt, now)
     else -> connection
+}
+
+private fun shortResult(result: String): String = when (result) {
+    SettingsViewModel.REACHABLE -> "reachable"
+    SettingsViewModel.UNREACHABLE -> "can't reach"
+    SettingsViewModel.UNAUTHORIZED -> "token refused"
+    SettingsViewModel.NOT_SET_UP -> "not set up"
+    SettingsViewModel.NOT_YOUR_DESKTOP -> "not your desktop"
+    else -> result
 }

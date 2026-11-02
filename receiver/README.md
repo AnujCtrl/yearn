@@ -1,8 +1,9 @@
 # yearn receiver
 
 A small Python service on the desktop that durably stores captures sent from
-the phone over Tailscale. It listens only on the Tailscale address (or
-127.0.0.1) and answers "stored" only after everything is fsynced and verified.
+the phone over Tailscale, or straight over your home Wi-Fi. It listens on every
+address (`0.0.0.0`), requires the pairing token on every request, and answers
+"stored" only after everything is fsynced and verified.
 
 It runs as a Docker container with host networking, restarted by Docker
 (`restart: unless-stopped`), so it comes back after a reboot as long as the
@@ -10,18 +11,27 @@ Docker service is enabled.
 
 ## Pair
 
-Pairing runs on the host, because it asks `tailscale ip -4` for the address:
+Pairing runs on the host, so it can see the machine's name and home address:
 
     cd receiver
     uv sync
     uv run yearn-receiver pair
 
-The first run creates `~/.config/yearn/receiver.toml` (mode 0600) with the
-Tailscale address, port 8787, data root `~/yearn-data` and a new token. It
-prints the token and `http://<this machine's name>:8787` for the phone (the
-name MagicDNS gives it; the Tailscale IP works too). Type both into the app's
-Settings. Running it again rotates only the token; restart the container
-afterwards.
+The first run creates `~/.config/yearn/receiver.toml` (mode 0600) with host
+`0.0.0.0`, port 8787, data root `~/yearn-data` and a new token. It prints the
+token, the Tailscale address `http://<this machine's name>:8787` (the name
+MagicDNS gives it; the Tailscale IP works too) and, when the machine is on a
+home network, the home Wi-Fi address `http://<its LAN IP>:8787`. Type them into
+the app's Settings; the home address is optional. Running it again rotates only
+the token; restart the container afterwards.
+
+For the home address, let the port through the firewall from your home network
+only (ufw shown), and reserve the desktop's IP in your router so it doesn't
+change:
+
+    sudo ufw allow from 192.168.0.0/16 to any port 8787 proto tcp
+
+`host` may also be a Tailscale address or `127.0.0.1` to listen on that alone.
 
 ## Run
 

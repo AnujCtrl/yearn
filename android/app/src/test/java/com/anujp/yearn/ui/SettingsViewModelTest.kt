@@ -12,6 +12,7 @@ import com.anujp.yearn.sync.ReceiverClient
 import com.anujp.yearn.sync.SettingsStore
 import com.anujp.yearn.sync.XorBox
 import com.anujp.yearn.ui.settings.SettingsViewModel
+import com.anujp.yearn.ui.settings.connectionLabel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -202,5 +203,76 @@ class SettingsViewModelTest {
         val vm = SettingsViewModel(SettingsStore(context, XorBox()), dao = dao, clientFactory = { null }, power = { true }, scheduler = rec)
         vm.setAddress("desk.tail1234.ts.net:8787").join()
         assertTokenFailureRetried(rec)
+    }
+
+    @Test
+    fun setHomeAddress_isOptional_andOnlyAcceptsAHomeNetworkIp() = runTest {
+        val store = SettingsStore(context, XorBox())
+        val vm = SettingsViewModel(store, dao = dao, clientFactory = { null }, power = { true }, scheduler = scheduler)
+        assertNull(vm.homeAddress.first())
+
+        vm.setHomeAddress(" 192.168.1.20:8787").join()
+        assertEquals("http://192.168.1.20:8787", store.homeUrl.first())
+        assertNull(vm.homeAddressError.value)
+        assertEquals(1, scheduler.nowCount)
+
+        vm.setHomeAddress("8.8.8.8:8787").join()
+        assertEquals("http://192.168.1.20:8787", store.homeUrl.first())
+        assertEquals(SettingsViewModel.BAD_HOME_ADDRESS, vm.homeAddressError.value)
+
+        vm.setHomeAddress("100.101.102.103:8787").join() // that is the Tailscale address, not the home one
+        assertEquals(SettingsViewModel.BAD_HOME_ADDRESS, vm.homeAddressError.value)
+
+        vm.setHomeAddress("  ").join() // blank removes it
+        assertNull(store.homeUrl.first())
+        assertNull(vm.homeAddressError.value)
+    }
+
+    @Test
+    fun testConnection_checksTheHomeAddressToo() = runTest {
+        val home = MockWebServer().apply { start() }
+        try {
+            var homeClient: ReceiverClient? = null
+            val vm = SettingsViewModel(
+                SettingsStore(context, XorBox()), dao = dao,
+                clientFactory = { ReceiverClient.create(server.url("/"), "tok", http) },
+                homeClientFactory = { homeClient },
+                power = { true }, scheduler = scheduler,
+            )
+            // No home address: only Tailscale is checked.
+            server.enqueue(json(200, """{"ok":true}"""))
+            vm.testConnection().join()
+            assertEquals("Reachable", vm.connection.value)
+            assertEquals("", vm.homeConnection.value)
+
+            homeClient = ReceiverClient.create(home.url("/"), "tok", http)
+            server.enqueue(json(503, """{"error":"busy"}"""))
+            home.enqueue(json(200, """{"proof":"${"0".repeat(64)}"}"""))
+            vm.testConnection().join()
+            assertEquals("Couldn't reach your desktop", vm.connection.value)
+            assertEquals(SettingsViewModel.NOT_YOUR_DESKTOP, vm.homeConnection.value)
+            assertEquals("/v1/prove", home.takeRequest().requestUrl!!.encodedPath)
+
+            home.shutdown()
+            server.enqueue(json(200, """{"ok":true}"""))
+            vm.testConnection().join()
+            assertEquals("Couldn't reach your desktop", vm.homeConnection.value)
+        } finally {
+            runCatching { home.shutdown() }
+        }
+    }
+
+    @Test
+    fun connectionLabel_namesBothRoutesWhenThereIsAHomeAddress() {
+        val now = java.time.ZonedDateTime.now()
+        assertEquals(
+            "Wi-Fi: reachable · Tailscale: can't reach",
+            connectionLabel(SettingsViewModel.UNREACHABLE, now, testing = false, now = now, home = SettingsViewModel.REACHABLE),
+        )
+        assertEquals(
+            "Wi-Fi: not your desktop · Tailscale: reachable",
+            connectionLabel(SettingsViewModel.REACHABLE, now, testing = false, now = now, home = SettingsViewModel.NOT_YOUR_DESKTOP),
+        )
+        assertEquals("Checking…", connectionLabel("", null, testing = true, now = now, home = SettingsViewModel.REACHABLE))
     }
 }

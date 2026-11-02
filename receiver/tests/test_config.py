@@ -10,9 +10,9 @@ from yearn_receiver.config import (
 )
 
 
-def test_bind_rejects_all_interfaces():
-    with pytest.raises(ConfigError):
-        validate_bind_host("0.0.0.0")
+def test_bind_accepts_all_interfaces():
+    # Tailscale and the home Wi-Fi reach the same port; the token and the firewall guard it.
+    validate_bind_host("0.0.0.0")
 
 
 def test_bind_rejects_lan_address():

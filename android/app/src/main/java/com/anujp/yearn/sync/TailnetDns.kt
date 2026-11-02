@@ -13,13 +13,21 @@ import java.net.UnknownHostException
  * fd7a:115c:a1e0::/48) or loopback; anything else throws [UnknownHostException], which the client maps to
  * Unreachable, so a capture waits instead of sending its token in cleartext to whatever the local network's
  * DNS points at when Tailscale is off. IP literals get the same check without a lookup.
+ *
+ * [home] is the same guard for the home Wi-Fi address: private LAN ranges and loopback only. A private
+ * address can be anyone's network, so the home client also has the desktop prove it holds the token before
+ * the token is sent (see [ReceiverClient.proves]).
  */
-class TailnetDns(private val delegate: Dns = Dns.SYSTEM) : Dns {
+class TailnetDns(
+    private val delegate: Dns = Dns.SYSTEM,
+    private val allow: (InetAddress) -> Boolean = ::isAllowed,
+    private val where: String = "on your tailnet",
+) : Dns {
     override fun lookup(hostname: String): List<InetAddress> {
         val literal = literalOrNull(hostname)
         val all = if (literal != null) listOf(literal) else delegate.lookup(hostname)
-        val allowed = all.filter(::isAllowed)
-        if (allowed.isEmpty()) throw UnknownHostException("$hostname is not on your tailnet")
+        val allowed = all.filter(allow)
+        if (allowed.isEmpty()) throw UnknownHostException("$hostname is not $where")
         return allowed
     }
 
@@ -37,6 +45,18 @@ class TailnetDns(private val delegate: Dns = Dns.SYSTEM) : Dns {
 
     companion object {
         private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
+
+        /** The guard for the home Wi-Fi address. */
+        fun home(delegate: Dns = Dns.SYSTEM) = TailnetDns(delegate, ::isHomeNetwork, "on a home network")
+
+        /** Loopback, 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16. */
+        fun isHomeNetwork(a: InetAddress): Boolean {
+            if (a.isLoopbackAddress) return true
+            if (a !is Inet4Address) return false
+            val b0 = a.address[0].toInt() and 0xff
+            val b1 = a.address[1].toInt() and 0xff
+            return b0 == 10 || (b0 == 172 && b1 in 16..31) || (b0 == 192 && b1 == 168)
+        }
 
         /** Parses an IPv4 or IPv6 literal without touching DNS; null for a name. */
         fun literalOrNull(host: String): InetAddress? {

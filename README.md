@@ -25,3 +25,9 @@ Releases are signed APKs built by GitHub Actions. Add this repo's URL to
 
 Both devices must be on the same Tailscale tailnet. The app refuses to send
 anything to an address outside it.
+
+Optionally, also enter the desktop's **Home Wi-Fi address** (`pair` prints it). On
+Wi-Fi the app tries it first and falls back to Tailscale. Before sending the
+token there it has the desktop prove it holds the token, so another network that
+happens to use the same IP never receives it. On your own Wi-Fi the token and
+captures travel unencrypted, protected by the Wi-Fi password.

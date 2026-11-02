@@ -58,6 +58,9 @@ object GlassIcons {
     /** Settings tiles. */
     val Check: ImageVector = strokeIcon("check", 2.6f, "M5 12.5l4.5 4.5L19 7.5")
     val Swap: ImageVector = strokeIcon("swap", 2.2f, "M4 8h14M14 4l4 4-4 4", "M20 16H6M10 12l-4 4 4 4")
+    val Wifi: ImageVector = strokeIcon(
+        "wifi", 2.2f, "M3 9.5a13 13 0 0 1 18 0", "M6.5 13a8 8 0 0 1 11 0", "M10 16.5a3 3 0 0 1 4 0", "M12 20h.01",
+    )
     val Moon: ImageVector = strokeIcon("moon", 2.2f, "M19.5 14.5A8 8 0 1 1 9.5 4.5a6.5 6.5 0 0 0 10 10z")
 
     /** A page with a folded corner: one file of a save. */

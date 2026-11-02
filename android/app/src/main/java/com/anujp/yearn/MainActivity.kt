@@ -36,7 +36,8 @@ class MainActivity : ComponentActivity() {
                 SettingsViewModel(
                     graph.settings,
                     graph.dao,
-                    graph.clientFactory,
+                    graph.tailnetClientFactory,
+                    homeClientFactory = graph.homeClientFactory,
                     power = { power?.isIgnoringBatteryOptimizations(app.packageName) ?: true },
                     scheduler = graph.scheduler,
                 )

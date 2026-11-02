@@ -17,25 +17,45 @@ def write_config(path, data_root, token=TOKEN, extra=""):
 
 
 def test_pair_creates_config_with_0600_and_long_token(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_tailscale_ipv4", lambda: "100.101.102.103")
     monkeypatch.setattr(cli, "_hostname", lambda: "desk")
+    monkeypatch.setattr(cli, "_lan_ipv4", lambda: "192.168.1.20")
     cfg = tmp_path / "sub" / "receiver.toml"
 
     assert cli.main(["pair", "--config", str(cfg)]) == 0
 
     assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
     data = tomllib.loads(cfg.read_text())
-    assert data["host"] == "100.101.102.103"
+    assert data["host"] == "0.0.0.0"
     assert data["port"] == 8787
     assert len(data["token"]) >= 32
     out = capsys.readouterr().out
     assert data["token"] in out
     assert "http://desk:8787" in out
+    assert "http://192.168.1.20:8787" in out
+
+
+def test_pair_without_a_home_network_prints_only_the_tailscale_address(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "_hostname", lambda: "desk")
+    monkeypatch.setattr(cli, "_lan_ipv4", lambda: None)
+
+    assert cli.main(["pair", "--config", str(tmp_path / "receiver.toml")]) == 0
+
+    out = capsys.readouterr().out
+    assert "http://desk:8787" in out
+    assert "Wi-Fi" not in out
+
+
+@pytest.mark.parametrize(
+    ("addr", "home"), [("192.168.1.20", True), ("10.0.0.5", True), ("100.101.102.103", False), ("8.8.8.8", False)]
+)
+def test_only_a_private_address_counts_as_home(monkeypatch, addr, home):
+    monkeypatch.setattr(cli, "_route_source_ipv4", lambda: addr)
+    assert cli._lan_ipv4() == (addr if home else None)
 
 
 def test_pair_rotates_token_keeps_other_keys(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_tailscale_ipv4", lambda: pytest.fail("must not be called"))
     monkeypatch.setattr(cli, "_hostname", lambda: "desk")
+    monkeypatch.setattr(cli, "_lan_ipv4", lambda: None)
     cfg = tmp_path / "receiver.toml"
     write_config(cfg, tmp_path / "data", extra="# keep me\n")
 

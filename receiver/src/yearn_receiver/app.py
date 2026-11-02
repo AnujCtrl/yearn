@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import hmac
 import json
 import re
@@ -22,15 +23,29 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _INDEX = re.compile(r"[0-9]{1,9}")
 
 
+PROVE_PATH = "/v1/prove"
+_PROVE_CONTEXT = b"yearn-prove-v1:"
+_NONCE = re.compile(r"[0-9a-f]{32,128}")
+
+
+def prove(token: str, nonce: str) -> str:
+    """HMAC-SHA256 of the phone's nonce under the token: only a desktop holding the token can answer."""
+    return hmac.new(token.encode(), _PROVE_CONTEXT + nonce.encode(), hashlib.sha256).hexdigest()
+
+
 class BearerAuth:
-    """Pure ASGI middleware: no task cancellation, no body interference."""
+    """Pure ASGI middleware: no task cancellation, no body interference.
+
+    Only the prove endpoint is open: the phone calls it before sending the token to a home Wi-Fi address,
+    so that an impostor at the same address on someone else's network never receives the token.
+    """
 
     def __init__(self, app: ASGIApp, token: str):
         self.app = app
         self.expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or scope["path"] == PROVE_PATH:
             await self.app(scope, receive, send)
             return
         given = b""
@@ -71,6 +86,12 @@ def _canonical_id(raw: str) -> str | None:
 def create_app(store: CaptureStore, token: str) -> Starlette:
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"service": "yearn-receiver", "api": 1})
+
+    async def prove_token(request: Request) -> JSONResponse:
+        nonce = request.query_params.get("nonce", "")
+        if not _NONCE.fullmatch(nonce):
+            return _err("bad_nonce", 400)
+        return JSONResponse({"proof": prove(token, nonce)})
 
     async def status(request: Request) -> JSONResponse:
         cid = _canonical_id(request.path_params["id"])
@@ -145,6 +166,7 @@ def create_app(store: CaptureStore, token: str) -> Starlette:
     return Starlette(
         routes=[
             Route("/v1/health", health, methods=["GET"]),
+            Route(PROVE_PATH, prove_token, methods=["GET"]),
             Route("/v1/captures/{id}", status, methods=["GET"]),
             Route("/v1/captures/{id}/files/{index}", put_file, methods=["PUT"]),
             Route("/v1/captures/{id}/commit", commit, methods=["POST"]),

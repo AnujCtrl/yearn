@@ -23,7 +23,11 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
 import java.net.Proxy
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 sealed class ReceiverError : Exception() {
     /** An [IOException] or a 5xx (including 507 disk_full): worth retrying later. */
@@ -54,6 +58,7 @@ data class RemoteStatus(val stored: Boolean, val staged: Map<Int, String>)
 /** Phone side of the receiver's wire contract v1. Streams file bodies; never buffers a whole file. */
 class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, private val http: OkHttpClient) {
     private val jsonType = "application/json".toMediaType()
+    private val random = SecureRandom()
 
     companion object {
         /**
@@ -61,11 +66,15 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
          * Cleartext is only safe inside the tailnet: [TailnetDns] refuses every other address (names and IP
          * literals alike), no proxy is used, and redirects are never followed, so the Bearer token cannot be
          * sent anywhere else.
+         *
+         * With [home] the guard allows private LAN addresses instead, and connecting gives up after 2 s so a
+         * home address that isn't there falls back to Tailscale quickly. Callers must have the desktop
+         * [proves] it holds the token before using a home client for anything else.
          */
-        fun httpClient(): OkHttpClient {
-            val dns = TailnetDns()
+        fun httpClient(home: Boolean = false): OkHttpClient {
+            val dns = if (home) TailnetDns.home() else TailnetDns()
             return OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
+                .connectTimeout(if (home) 2L else 10L, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
                 .writeTimeout(120, TimeUnit.SECONDS)
                 .dns(dns)
@@ -87,6 +96,35 @@ class ReceiverClient(private val baseUrl: HttpUrl, private val token: String, pr
     suspend fun health() {
         call(request("v1", "health").get().build())
     }
+
+    /**
+     * Whether the desktop at this address holds the token, asked without sending it: `GET /v1/prove` with a
+     * fresh random nonce and no Authorization header, answered with HMAC-SHA256(token, "yearn-prove-v1:" +
+     * nonce). False for a wrong answer or anything that isn't one; throws [ReceiverError.Unreachable] when
+     * nothing answers.
+     */
+    suspend fun proves(): Boolean {
+        val nonce = ByteArray(16).also(random::nextBytes).toHex()
+        val url = baseUrl.newBuilder().addPathSegment("v1").addPathSegment("prove")
+            .addQueryParameter("nonce", nonce).build()
+        val body = try {
+            call(Request.Builder().url(url).get().build())
+        } catch (_: ReceiverError.Rejected) {
+            return false
+        } catch (_: ReceiverError.Unauthorized) {
+            return false
+        }
+        val proof = (parse(body)?.get("proof") as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return false
+        return MessageDigest.isEqual(proof.toByteArray(), proofFor(nonce).toByteArray())
+    }
+
+    private fun proofFor(nonce: String): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(token.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        return mac.doFinal("yearn-prove-v1:$nonce".toByteArray(Charsets.UTF_8)).toHex()
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     suspend fun status(id: String): RemoteStatus {
         val body = call(request("v1", "captures", id).get().build())

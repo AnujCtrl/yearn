@@ -26,19 +26,21 @@ class Config:
 
 
 def validate_bind_host(host: str) -> None:
+    """0.0.0.0 (Tailscale and the home Wi-Fi both, guarded by the token and the firewall), a Tailscale
+    address, or 127.0.0.1. A single LAN address is refused: it would drop the Tailscale path."""
     try:
         addr = ipaddress.IPv4Address(host)
     except ValueError:
         raise ConfigError(
-            f"host {host!r} is not an IPv4 address; use 127.0.0.1 or the "
+            f"host {host!r} is not an IPv4 address; use 0.0.0.0, 127.0.0.1 or the "
             "Tailscale address (100.64.0.0/10)"
         ) from None
-    if addr.is_loopback and host == "127.0.0.1":
+    if host in ("0.0.0.0", "127.0.0.1"):
         return
     if addr in TAILSCALE_NET:
         return
     raise ConfigError(
-        f"refusing to listen on {host}: only 127.0.0.1 or a Tailscale "
+        f"refusing to listen on {host}: only 0.0.0.0, 127.0.0.1 or a Tailscale "
         "address (100.64.0.0/10) is allowed"
     )
 

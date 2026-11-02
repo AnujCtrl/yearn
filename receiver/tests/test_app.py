@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import os
 from uuid import uuid4
 
@@ -190,3 +192,23 @@ async def test_disk_full_answers_507(tmp_path, monkeypatch, capsys, where):
     assert r.status_code == 507
     assert r.json() == {"error": "disk_full"}
     assert "disk full" in capsys.readouterr().err
+
+
+async def test_prove_answers_without_the_token(client_no_auth):
+    nonce = "ab" * 16
+    r = await client_no_auth.get("/v1/prove", params={"nonce": nonce})
+    assert r.status_code == 200
+    expected = hmac.new(TOKEN.encode(), b"yearn-prove-v1:" + nonce.encode(), hashlib.sha256).hexdigest()
+    assert r.json() == {"proof": expected}
+
+
+@pytest.mark.parametrize("nonce", ["", "ab" * 15, "AB" * 16, "zz" * 16, "ab" * 65])
+async def test_prove_rejects_a_bad_nonce(client_no_auth, nonce):
+    r = await client_no_auth.get("/v1/prove", params={"nonce": nonce})
+    assert r.status_code == 400
+    assert r.json() == {"error": "bad_nonce"}
+
+
+async def test_only_prove_is_open(client_no_auth):
+    assert (await client_no_auth.get("/v1/prove/", params={"nonce": "ab" * 16})).status_code == 401
+    assert (await client_no_auth.get("/v1/health")).status_code == 401

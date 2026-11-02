@@ -1,12 +1,12 @@
 """Command line: serve, pair, reindex."""
 
 import argparse
+import ipaddress
 import json
 import os
 import re
 import secrets
 import socket
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -14,23 +14,31 @@ from pathlib import Path
 import uvicorn
 
 from .app import create_app
-from .config import DEFAULT_DATA_ROOT, DEFAULT_PORT, ConfigError, load_config
+from .config import DEFAULT_DATA_ROOT, DEFAULT_PORT, TAILSCALE_NET, ConfigError, load_config
 from .store import CaptureStore
 
 DEFAULT_CONFIG = "~/.config/yearn/receiver.toml"
 
 
-def _tailscale_ipv4() -> str:
+def _route_source_ipv4() -> str | None:
+    """The address this machine would send from to reach the internet. A UDP connect sends no packet."""
     try:
-        result = subprocess.run(
-            ["tailscale", "ip", "-4"], capture_output=True, text=True, check=True
-        )
-    except (OSError, subprocess.CalledProcessError) as e:
-        raise ConfigError(f"could not get the Tailscale address from `tailscale ip -4`: {e}") from None
-    lines = result.stdout.strip().splitlines()
-    if not lines:
-        raise ConfigError("`tailscale ip -4` printed no address; is Tailscale up?")
-    return lines[0].strip()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
+def _lan_ipv4() -> str | None:
+    """This machine's home-network address, for the phone to try first on Wi-Fi; None when there is none."""
+    addr = _route_source_ipv4()
+    if addr is None:
+        return None
+    ip = ipaddress.IPv4Address(addr)
+    if not ip.is_private or ip.is_loopback or ip in TAILSCALE_NET:
+        return None
+    return addr
 
 
 def _hostname() -> str:
@@ -76,17 +84,20 @@ def _pair(path: Path) -> int:
             text = text.rstrip("\n") + "\n" + line + "\n"
         _write_private(path, text, replace=True)
     else:
-        host = _tailscale_ipv4()
         path.parent.mkdir(parents=True, exist_ok=True)
         text = (
-            f"host = {_toml_str(host)}\n"
+            # Every address: the phone comes in over Tailscale or, at home, straight over Wi-Fi.
+            'host = "0.0.0.0"\n'
             f"port = {DEFAULT_PORT}\n"
             f"data_root = {_toml_str(DEFAULT_DATA_ROOT)}\n"
             f"token = {_toml_str(token)}\n"
         )
         _write_private(path, text, replace=False)
-    print(f"token: {token}")
-    print(f"url:   http://{_hostname()}:{port}")
+    print(f"token:             {token}")
+    print(f"tailscale address: http://{_hostname()}:{port}")
+    lan = _lan_ipv4()
+    if lan is not None:
+        print(f"home Wi-Fi address: http://{lan}:{port}")
     return 0
 
 

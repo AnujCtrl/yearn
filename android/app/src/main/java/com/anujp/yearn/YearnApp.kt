@@ -15,6 +15,8 @@ import com.anujp.yearn.sync.ReceiverClient
 import com.anujp.yearn.sync.SettingsStore
 import com.anujp.yearn.sync.SyncWorkerFactory
 import com.anujp.yearn.sync.WorkSyncScheduler
+import com.anujp.yearn.sync.pickReceiver
+import com.anujp.yearn.sync.wifiCheck
 import kotlinx.coroutines.flow.first
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.ZonedDateTime
@@ -36,8 +38,12 @@ class AppGraph(
     val service: CaptureService,
     val uploader: CaptureUploader,
     val settings: SettingsStore,
-    /** The one way to get a receiver client: from the saved address and token; null means not set up. */
+    /** Uploads get their receiver client here: home Wi-Fi first, then Tailscale; null means not set up. */
     val clientFactory: suspend () -> ReceiverClient? = receiverClientFactory(settings),
+    /** Settings' connection check: the Tailscale address on its own. */
+    val tailnetClientFactory: suspend () -> ReceiverClient? = tailnetClientFactory(settings),
+    /** Settings' connection check: the home Wi-Fi address on its own, not yet proven. */
+    val homeClientFactory: suspend () -> ReceiverClient? = homeClientFactory(settings),
 ) {
     companion object {
         fun build(
@@ -54,17 +60,31 @@ class AppGraph(
             val service = CaptureService(
                 dao, copier, scheduler, thumbs, deviceJson(app), beforeFirstCapture = recovery,
             )
-            val clientFactory = receiverClientFactory(settings)
+            val clientFactory = receiverClientFactory(settings, wifiCheck(app))
             val uploader = CaptureUploader(dao, client = clientFactory, clock = { ZonedDateTime.now() })
             return AppGraph(db, dao, copier, thumbs, scheduler, service, uploader, settings, clientFactory)
         }
     }
 }
 
-fun receiverClientFactory(settings: SettingsStore): suspend () -> ReceiverClient? = {
+/** Home Wi-Fi first when the phone is on Wi-Fi and a home address is saved, then Tailscale. */
+fun receiverClientFactory(settings: SettingsStore, onWifi: () -> Boolean = { true }): suspend () -> ReceiverClient? = {
+    val token = settings.token()
+    val home = settings.homeUrl.first()?.toHttpUrlOrNull()?.takeIf { onWifi() }
+    val tailnet = settings.baseUrl.first()?.toHttpUrlOrNull()
+    if (token == null) null else pickReceiver(home, tailnet, token)
+}
+
+fun tailnetClientFactory(settings: SettingsStore): suspend () -> ReceiverClient? = {
     val url = settings.baseUrl.first()?.toHttpUrlOrNull()
     val token = settings.token()
     if (url == null || token == null) null else ReceiverClient.create(url, token)
+}
+
+fun homeClientFactory(settings: SettingsStore): suspend () -> ReceiverClient? = {
+    val url = settings.homeUrl.first()?.toHttpUrlOrNull()
+    val token = settings.token()
+    if (url == null || token == null) null else ReceiverClient.create(url, token, ReceiverClient.httpClient(home = true))
 }
 
 open class YearnApp : Application(), Configuration.Provider {

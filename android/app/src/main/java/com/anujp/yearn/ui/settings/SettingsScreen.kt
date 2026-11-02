@@ -88,6 +88,8 @@ import java.time.ZonedDateTime
 data class SettingsUi(
     val address: String?,
     val addressError: String?,
+    val homeAddress: String?,
+    val homeAddressError: String?,
     val hasToken: Boolean?,
     val tokenMask: String?,
     val tokenError: String?,
@@ -102,11 +104,14 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, modifier: Modifier
     val context = LocalContext.current
     val address by vm.address.collectAsStateWithLifecycle()
     val addressError by vm.addressError.collectAsStateWithLifecycle()
+    val homeAddress by vm.homeAddress.collectAsStateWithLifecycle()
+    val homeAddressError by vm.homeAddressError.collectAsStateWithLifecycle()
     val hasToken by vm.hasToken.collectAsStateWithLifecycle()
     val mask by vm.tokenMask.collectAsStateWithLifecycle()
     val tokenError by vm.tokenError.collectAsStateWithLifecycle()
     val lastSync by vm.lastSuccessfulSync.collectAsStateWithLifecycle()
     val connection by vm.connection.collectAsStateWithLifecycle()
+    val homeConnection by vm.homeConnection.collectAsStateWithLifecycle()
     val checkedAt by vm.checkedAt.collectAsStateWithLifecycle()
     val testing by vm.testing.collectAsStateWithLifecycle()
     val battery by vm.batteryUnrestricted.collectAsStateWithLifecycle()
@@ -117,18 +122,23 @@ fun SettingsScreen(vm: SettingsViewModel, onBack: () -> Unit, modifier: Modifier
     val ui = SettingsUi(
         address = address,
         addressError = addressError,
+        homeAddress = homeAddress,
+        homeAddressError = homeAddressError,
         hasToken = hasToken,
         tokenMask = mask,
         tokenError = tokenError,
         lastSync = lastSyncLabel(lastSync, now),
-        connection = connectionLabel(connection, checkedAt, testing, now),
-        connectionFailed = !testing && connection.isNotEmpty() && connection != SettingsViewModel.REACHABLE,
+        connection = connectionLabel(connection, checkedAt, testing, now, home = homeConnection),
+        // Red only when neither route got through.
+        connectionFailed = !testing && connection.isNotEmpty() && connection != SettingsViewModel.REACHABLE &&
+            homeConnection != SettingsViewModel.REACHABLE,
         batteryUnrestricted = battery,
     )
     SettingsScreen(
         ui,
         onBack = onBack,
         onAddress = { vm.setAddress(it) },
+        onHomeAddress = { vm.setHomeAddress(it) },
         onToken = { vm.setToken(it) },
         onTest = { vm.testConnection() },
         onBattery = { openBatterySettings(context, battery) },
@@ -141,6 +151,7 @@ fun SettingsScreen(
     ui: SettingsUi,
     onBack: () -> Unit,
     onAddress: (String) -> Unit,
+    onHomeAddress: (String) -> Unit,
     onToken: (String) -> Unit,
     onTest: () -> Unit,
     onBattery: () -> Unit,
@@ -166,9 +177,16 @@ fun SettingsScreen(
 
             Section(
                 "Your desktop",
-                "Reached over Tailscale only. The pairing token stays in the phone’s secure storage.",
+                "On Wi-Fi yearn tries the home address first, then Tailscale. The pairing token stays in the phone’s secure storage.",
             ) {
-                AddressRow(ui.address, ui.addressError, onAddress)
+                AddressRow(
+                    Tile.Letter(Color(0xFF0A84FF), "@"), "Tailscale address", ui.address, ui.addressError,
+                    "desktop.tailnet.ts.net:8787", "Desktop Tailscale address", onAddress,
+                )
+                AddressRow(
+                    Tile.Glyph(Color(0xFF30B0C7), GlassIcons.Wifi), "Home Wi-Fi address", ui.homeAddress,
+                    ui.homeAddressError, "Optional: 192.168.1.20:8787", "Desktop home Wi-Fi address", onHomeAddress,
+                )
                 PairingRow(ui.hasToken, ui.tokenMask, ui.tokenError, onToken)
                 SettingRow(Tile.Glyph(Color(0xFF34C759), GlassIcons.Check), "Last successful sync", ui.lastSync)
                 SettingRow(
@@ -315,24 +333,32 @@ private fun SettingRow(
     }
 }
 
-/** Address: the subtitle is the field. Saved on Done or when focus leaves with a change. */
+/** An address: the subtitle is the field. Saved on Done or when focus leaves with a change. */
 @Composable
-private fun AddressRow(address: String?, error: String?, onSave: (String) -> Unit) {
+private fun AddressRow(
+    tile: Tile,
+    title: String,
+    address: String?,
+    error: String?,
+    placeholder: String,
+    description: String,
+    onSave: (String) -> Unit,
+) {
     val colors = LocalYearnColors.current
     val focus = LocalFocusManager.current
     val requester = remember { FocusRequester() }
     var text by rememberSaveable(address) { mutableStateOf(address.orEmpty()) }
     var focused by remember { mutableStateOf(false) }
     SettingRow(
-        Tile.Letter(Color(0xFF0A84FF), "@"),
-        "Address",
+        tile,
+        title,
         sub = null,
         onClick = { requester.requestFocus() },
         below = {
             InlineField(
                 text,
                 { text = it },
-                placeholder = "desktop.tailnet.ts.net:8787",
+                placeholder = placeholder,
                 style = YearnType.Caption.copy(color = if (focused) colors.label else colors.secondaryLabel),
                 keyboard = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false, imeAction = ImeAction.Done),
                 onDone = {
@@ -345,7 +371,7 @@ private fun AddressRow(address: String?, error: String?, onSave: (String) -> Uni
                         if (focused && !it.isFocused && text != address.orEmpty()) onSave(text)
                         focused = it.isFocused
                     }
-                    .semantics { contentDescription = "Desktop address" },
+                    .semantics { contentDescription = description },
             )
             if (error != null) BasicText(error, style = YearnType.Caption.copy(color = colors.danger))
         },
